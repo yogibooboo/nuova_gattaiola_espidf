@@ -8,6 +8,7 @@
 #include <driver/gpio.h>
 #include <driver/i2c.h>
 //#include "AS5600.h"
+#include <string> 
 
 // Definizione dei pin con la nuova nomenclatura in maiuscolo
 #define PWM_PIN                 32      // RFID Reader
@@ -49,7 +50,7 @@ extern SemaphoreHandle_t doorModeSemaphore;
 typedef struct {
     char timestamp[20];
     const char* type;
-    String name;
+    std::string name;
     uint16_t country_code;
     uint64_t device_code;
     bool authorized;
