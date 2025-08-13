@@ -1,0 +1,12 @@
+# File e cartelle di sistema
+.DS_Store
+Thumbs.db
+
+# Cartella delle dipendenze e dei toolchain di PlatformIO
+.pio/
+
+# Cartella di build
+.build/
+
+# File di configurazione locale di VSCode
+.vscode/
