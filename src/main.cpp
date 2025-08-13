@@ -1,4 +1,4 @@
-#include "common.h"
+#include "comune.h"
 #include "core1.h"
 #include "wifi.h"
 #include "door.h"
@@ -16,7 +16,7 @@ void motor_calibration_task(void *pvParameters);
 
 // Inizializzazione delle variabili globali
 volatile DoorMode door_mode = AUTO;
-volatile bool wifi_connected = false;
+
 volatile uint32_t door_sync_count = 0;
 volatile uint32_t display_sync_count = 0;
 

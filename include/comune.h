@@ -1,5 +1,5 @@
-#ifndef COMMON_H
-#define COMMON_H
+#ifndef COMUNE_H
+#define COMUNE_H
 
 //#include <Arduino.h> // Manteniamo questo per ora per la compatibilità con i tipi di dato e le API di base di Arduino, ma lo sostituiremo in futuro.
 #include <freertos/FreeRTOS.h>
