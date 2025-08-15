@@ -11,23 +11,26 @@
 #include <string> 
 
 // Definizione dei pin con la nuova nomenclatura in maiuscolo
-#define PWM_PIN                 32      // RFID Reader
-#define PBLUE                   25      // Pulsante blu per apertura manuale
-#define LEDROSSO                26      // LED rosso (porta aperta)
-#define WIFI_LED                27      // LED stato WiFi
-#define INFRARED_PIN            34      // Sensore infrarosso della gattaiola
-#define INFRARED_ENABLE         33      // Abilitazione sensore infrarosso
+#define PWM_PIN                 GPIO_NUM_32      // RFID Reader
+#define PBLUE                   GPIO_NUM_25      // Pulsante blu per apertura manuale
+#define LEDROSSO                GPIO_NUM_26      // LED rosso (porta aperta)
+#define WIFI_LED                GPIO_NUM_27    // LED stato WiFi
+#define INFRARED_PIN            GPIO_NUM_34      // Sensore infrarosso della gattaiola
+#define INFRARED_ENABLE         GPIO_NUM_33      // Abilitazione sensore infrarosso
 
-#define STEP_A_PLUS             12
-#define STEP_A_MINUS            13
-#define STEP_B_PLUS             14
-#define STEP_B_MINUS            15
-#define ENABLE_PIN              16
+#define STEP_A_PLUS             GPIO_NUM_12
+#define STEP_A_MINUS            GPIO_NUM_13
+#define STEP_B_PLUS             GPIO_NUM_14
+#define STEP_B_MINUS            GPIO_NUM_15
+#define ENABLE_PIN              GPIO_NUM_16
 
 #define SERVO_PWM_CHANNEL       0
 #define SERVO_PWM_TIMER         LEDC_TIMER_0
 #define SERVO_PWM_RESOLUTION    16
-#define SERVO_PIN               4
+#define SERVO_PIN               GPIO_NUM_4
+
+//variabili comuni per il debug:
+extern int8_t wifi_rssi;  // RSSI corrente Wi-Fi
 
 // Definizione dello stato della porta
 typedef enum {

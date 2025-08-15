@@ -11,7 +11,7 @@
 static const char *TAG = "WIFI";
 
 static httpd_handle_t server = NULL;
-volatile bool wifi_connected = false;
+
 
 // === HANDLER ROOT ===
 static esp_err_t root_handler(httpd_req_t *req) {
@@ -28,7 +28,7 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     }
 
     httpd_ws_frame_t ws_pkt;
-    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+    memset(&ws_pkt, 0, sizeof(ws_pkt));
 
     // Legge solo la lunghezza
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
@@ -71,19 +71,24 @@ static esp_err_t start_webserver(void) {
 
     if (httpd_start(&server, &config) == ESP_OK) {
         httpd_uri_t root_uri = {
-            .uri      = "/",
-            .method   = HTTP_GET,
-            .handler  = root_handler,
-            .user_ctx = NULL
-        };
+            .uri = "/",
+            .method = HTTP_GET,
+            .handler = root_handler,
+            .user_ctx = NULL,
+            .is_websocket = false,
+            .handle_ws_control_frames = NULL,
+            .supported_subprotocol = NULL
+        };       
         httpd_register_uri_handler(server, &root_uri);
 
         httpd_uri_t ws_uri = {
-            .uri        = "/ws",
-            .method     = HTTP_GET,
-            .handler    = ws_handler,
-            .user_ctx   = NULL,
-            .is_websocket = true
+            .uri = "/ws",
+            .method = HTTP_GET,
+            .handler = ws_handler,
+            .user_ctx = NULL,
+            .is_websocket = true,
+            .handle_ws_control_frames = NULL,
+            .supported_subprotocol = NULL
         };
         httpd_register_uri_handler(server, &ws_uri);
     }
@@ -144,12 +149,10 @@ void setup_wifi() {
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
 
-    wifi_config_t wifi_config = {
-        .sta = {
-            .ssid = WIFI_SSID,
-            .password = WIFI_PASSWORD,
-        },
-    };
+    wifi_config_t wifi_config;
+    memset(&wifi_config, 0, sizeof(wifi_config));
+    strcpy((char*)wifi_config.sta.ssid, WIFI_SSID);
+    strcpy((char*)wifi_config.sta.password, WIFI_PASSWORD);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
