@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pet Door</title>
+</head>
+<body>
+    <h1>Benvenuto nella Pet Door!</h1>
+    <p>Stato Wi-Fi: <span id="wifi-status">Non connesso</span></p>
+    <p>RSSI: <span id="rssi">N/A</span> dBm</p>
+    <button onclick="connectWebSocket()">Connetti WebSocket</button>
+    <p>Messaggi WebSocket: <div id="messages"></div></p>
+    <script>
+        function connectWebSocket() {
+            const ws = new WebSocket('ws://' + window.location.host + '/ws');
+            const statusElement = document.getElementById('wifi-status');
+            const rssiElement = document.getElementById('rssi');
+            const messagesElement = document.getElementById('messages');
+
+            ws.onopen = function() {
+                statusElement.textContent = 'Connesso';
+                console.log('WebSocket connesso');
+                ws.send('Test dal browser');
+            };
+
+            ws.onmessage = function(event) {
+                messagesElement.innerHTML += `<p>Messaggio ricevuto: ${event.data}</p>`;
+                console.log('Messaggio ricevuto:', event.data);
+            };
+
+            ws.onclose = function() {
+                statusElement.textContent = 'Disconnesso';
+                console.log('WebSocket disconnesso');
+            };
+
+            ws.onerror = function(error) {
+                statusElement.textContent = 'Errore';
+                console.log('Errore WebSocket:', error);
+            };
+        }
+    </script>
+</body>
+</html>

@@ -1,6 +1,8 @@
-# This file was automatically generated for projects
-# without default 'CMakeLists.txt' file.
+# CMakeLists.txt per il componente principale in src/
 
-FILE(GLOB_RECURSE app_sources ${CMAKE_SOURCE_DIR}/src/*.*)
-
-idf_component_register(SRCS ${app_sources})
+# Registra il componente principale
+idf_component_register(
+    SRCS "main.cpp" "wifi.cpp" "comune.cpp"
+    INCLUDE_DIRS "../include"
+    REQUIRES esp_http_server esp_wifi nvs_flash spiffs
+)

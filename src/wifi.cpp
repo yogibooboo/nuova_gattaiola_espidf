@@ -9,13 +9,35 @@
 #include <esp_netif.h>
 #include <esp_http_server.h>
 #include <nvs_flash.h>
+#include <esp_spiffs.h>
 
 static const char *TAG = "WIFI";
 static httpd_handle_t server = NULL;
 
 static esp_err_t root_handler(httpd_req_t *req) {
-    const char* resp_str = "Server HTTP & WebSocket attivo!";
-    httpd_resp_send(req, resp_str, strlen(resp_str));
+    // Apri il file index.html da SPIFFS
+    FILE *fd = fopen("/spiffs/index.html", "r");
+    if (fd == NULL) {
+        ESP_LOGE(TAG, "Errore apertura file /spiffs/index.html");
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "File non trovato");
+        return ESP_FAIL;
+    }
+
+    // Leggi e invia il file in blocchi
+    char buf[1024];
+    size_t bytes_read;
+    httpd_resp_set_type(req, "text/html");
+    while ((bytes_read = fread(buf, 1, sizeof(buf), fd)) > 0) {
+        if (httpd_resp_send_chunk(req, buf, bytes_read) != ESP_OK) {
+            fclose(fd);
+            ESP_LOGE(TAG, "Errore invio file index.html");
+            return ESP_FAIL;
+        }
+    }
+
+    fclose(fd);
+    // Indica la fine dei chunk
+    httpd_resp_send_chunk(req, NULL, 0);
     return ESP_OK;
 }
 
@@ -24,6 +46,50 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         ESP_LOGI(TAG, "Handshake WebSocket completato");
         return ESP_OK;
     }
+
+    // Inizializza il buffer per il frame WebSocket
+    uint8_t buf[128] = {0};
+    httpd_ws_frame_t ws_pkt = {
+        .final = false,
+        .fragmented = false,
+        .type = HTTPD_WS_TYPE_TEXT,
+        .payload = buf,
+        .len = 0
+    };
+
+    // Ricevi il frame WebSocket
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, sizeof(buf) - 1);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Errore ricezione frame WebSocket: %s (0x%x)", esp_err_to_name(ret), ret);
+        return ret;
+    }
+
+    // Aggiungi terminatore null per trattare il payload come stringa
+    buf[ws_pkt.len] = '\0';
+    ESP_LOGI(TAG, "Messaggio ricevuto (tipo: %d, lunghezza: %d): %s", ws_pkt.type, ws_pkt.len, buf);
+
+    // Verifica che il frame sia di tipo testo
+    if (ws_pkt.type == HTTPD_WS_TYPE_TEXT) {
+        // Invia una risposta
+        char resp[] = "Messaggio ricevuto dal server!";
+        httpd_ws_frame_t resp_pkt = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t*)resp,
+            .len = strlen(resp)
+        };
+
+        ret = httpd_ws_send_frame(req, &resp_pkt);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Errore invio risposta WebSocket: %s (0x%x)", esp_err_to_name(ret), ret);
+        } else {
+            ESP_LOGI(TAG, "Risposta inviata: %s", resp);
+        }
+    } else {
+        ESP_LOGW(TAG, "Frame non di tipo testo, ignorato (tipo: %d)", ws_pkt.type);
+    }
+
     return ESP_OK;
 }
 
@@ -53,7 +119,7 @@ static esp_err_t start_webserver(void) {
             .handler = ws_handler,
             .user_ctx = NULL,
             .is_websocket = true,
-            .handle_ws_control_frames = NULL,
+            .handle_ws_control_frames = true,
             .supported_subprotocol = NULL
         };
         ESP_LOGI(TAG, "Registrazione handler WebSocket...");
@@ -115,6 +181,32 @@ void setup_wifi(void) {
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    // Inizializzazione SPIFFS
+    ESP_LOGI(TAG, "Inizializzazione SPIFFS...");
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = "storage",
+        .max_files = 5,
+        .format_if_mount_failed = true
+    };
+    ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Partizione SPIFFS 'storage' non trovata");
+        } else {
+            ESP_LOGE(TAG, "Errore inizializzazione SPIFFS: %s (0x%x)", esp_err_to_name(ret), ret);
+        }
+        return;
+    }
+
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info("storage", &total, &used);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "SPIFFS: Totale: %d bytes, Usato: %d bytes", total, used);
+    } else {
+        ESP_LOGE(TAG, "Errore lettura informazioni SPIFFS: %s (0x%x)", esp_err_to_name(ret), ret);
+    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
