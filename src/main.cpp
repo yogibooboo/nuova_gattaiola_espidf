@@ -1,33 +1,22 @@
 #include "comune.h"
-#include "core1.h"
 #include "wifi.h"
 #include "door.h"
 #include "credentials.h"
-#include <driver/ledc.h>
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <driver/gpio.h>
+#include <esp_task_wdt.h>
 
 static const char *TAG = "MAIN_APP";
 
 void print_task(void *pvParameters);
-void motor_calibration_task(void *pvParameters);
-
-// Inizializzazione delle variabili globali
-volatile DoorMode door_mode = AUTO;
-
-volatile uint32_t door_sync_count = 0;
-volatile uint32_t display_sync_count = 0;
-
-portMUX_TYPE doorModeMux = portMUX_INITIALIZER_UNLOCKED;
-SemaphoreHandle_t doorModeSemaphore;
-
-LogEntry log_buffer[LOG_BUFFER_SIZE];
-size_t log_buffer_index = 0;
 
 extern "C" void app_main() {
     ESP_LOGI(TAG, "Avvio del sistema Pet Door");
+
+    // Disabilita il watchdog per evitare conflitti (come nel Passo 4)
+    ESP_ERROR_CHECK(esp_task_wdt_deinit());
 
     // Inizializzazione pin LED Wi-Fi
     gpio_config_t io_conf = {};
@@ -37,7 +26,7 @@ extern "C" void app_main() {
     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io_conf));
-    gpio_set_level(WIFI_LED, 1); // LED spento all'avvio (HIGH)
+    gpio_set_level(WIFI_LED, LED_OFF); // LED spento all'avvio
 
     doorModeSemaphore = xSemaphoreCreateMutex();
     if (doorModeSemaphore == NULL) {
@@ -55,7 +44,8 @@ void print_task(void *pvParameters) {
     const TickType_t interval = pdMS_TO_TICKS(1000);
 
     while (true) {
-        // La logica di stampa e invio dati rimarrà in questa funzione
+        ESP_LOGI(TAG, "RSSI Wi-Fi corrente: %d dBm, WiFi connesso: %d, Memoria libera: %u bytes",
+                 wifi_rssi, wifi_connected, esp_get_free_heap_size());
         vTaskDelayUntil(&last_wake_time, interval);
     }
 }
