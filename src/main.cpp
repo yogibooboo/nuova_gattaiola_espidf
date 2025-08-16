@@ -7,6 +7,7 @@
 #include <freertos/task.h>
 #include <driver/gpio.h>
 #include <esp_task_wdt.h>
+#include <esp_spiffs.h>
 
 static const char *TAG = "MAIN_APP";
 
@@ -14,6 +15,32 @@ void print_task(void *pvParameters);
 
 extern "C" void app_main() {
     ESP_LOGI(TAG, "Avvio del sistema Pet Door");
+
+    // Inizializzazione SPIFFS
+    ESP_LOGI(TAG, "Inizializzazione SPIFFS...");
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = "storage",
+        .max_files = 5,
+        .format_if_mount_failed = true
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAG, "Partizione SPIFFS 'storage' non trovata");
+        } else {
+            ESP_LOGE(TAG, "Errore inizializzazione SPIFFS: %s (0x%x)", esp_err_to_name(ret), ret);
+        }
+        return;
+    }
+
+    size_t total = 0, used = 0;
+    ret = esp_spiffs_info("storage", &total, &used);
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "SPIFFS: Totale: %d bytes, Usato: %d bytes", total, used);
+    } else {
+        ESP_LOGE(TAG, "Errore lettura informazioni SPIFFS: %s (0x%x)", esp_err_to_name(ret), ret);
+    }
 
     // Disabilita il watchdog per evitare conflitti (come nel Passo 4)
     ESP_ERROR_CHECK(esp_task_wdt_deinit());

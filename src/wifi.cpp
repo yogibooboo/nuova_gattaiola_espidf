@@ -9,7 +9,6 @@
 #include <esp_netif.h>
 #include <esp_http_server.h>
 #include <nvs_flash.h>
-#include <esp_spiffs.h>
 
 static const char *TAG = "WIFI";
 static httpd_handle_t server = NULL;
@@ -181,32 +180,6 @@ void setup_wifi(void) {
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-
-    // Inizializzazione SPIFFS
-    ESP_LOGI(TAG, "Inizializzazione SPIFFS...");
-    esp_vfs_spiffs_conf_t conf = {
-        .base_path = "/spiffs",
-        .partition_label = "storage",
-        .max_files = 5,
-        .format_if_mount_failed = true
-    };
-    ret = esp_vfs_spiffs_register(&conf);
-    if (ret != ESP_OK) {
-        if (ret == ESP_ERR_NOT_FOUND) {
-            ESP_LOGE(TAG, "Partizione SPIFFS 'storage' non trovata");
-        } else {
-            ESP_LOGE(TAG, "Errore inizializzazione SPIFFS: %s (0x%x)", esp_err_to_name(ret), ret);
-        }
-        return;
-    }
-
-    size_t total = 0, used = 0;
-    ret = esp_spiffs_info("storage", &total, &used);
-    if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "SPIFFS: Totale: %d bytes, Usato: %d bytes", total, used);
-    } else {
-        ESP_LOGE(TAG, "Errore lettura informazioni SPIFFS: %s (0x%x)", esp_err_to_name(ret), ret);
-    }
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
