@@ -1,0 +1,85 @@
+{
+    "door_timeout": 10000,
+    "steps_per_movement": 2500,
+    "step_interval_us": 500,
+    "wifi_reconnect_delay": 1000,
+    "unauthorized_log_interval": 60000,
+    "wifi_verbose_log": true,
+    "door_mode": "AUTO",
+    "motor_type": "servo",
+    "servo_open_us": 1800,
+    "servo_closed_us": 1200,
+    "servo_transition_ms": 1000,
+    "config_01": 0,
+    "config_02": 113,
+    "config_03": 682,
+    "config_04": 200,
+    "config_05": 0,
+    "config_06": 0,
+    "config_07": 0,
+    "config_08": 0,
+    "config_09": 0,
+    "config_10": 0,
+    "door_rest": 2051,
+    "door_in": 971,
+    "door_out": 3072,
+    "authorized_cats": [
+        {
+            "device_code": 260160166400,
+            "country_code": 380,
+            "name": "Lego",
+            "authorized": false
+        },
+
+        {
+            "device_code": 260101573791,
+            "country_code": 380,
+            "name": "Golia",
+            "authorized": false
+        },
+
+        {
+            "device_code": 263002119508,
+            "country_code": 900,
+            "name": "Nastronero",
+            "authorized": true
+        },
+        {
+            "device_code": 215002273326,
+            "country_code": 900,
+            "name": "Nastroverde",
+            "authorized": true
+        },
+        {
+            "device_code": 263002119503,
+            "country_code": 900,
+            "name": "Nastrorosso",
+            "authorized": true
+        },
+
+        {
+            "device_code": 263002119568,
+            "country_code": 900,
+            "name": "Scheggiafinto",
+            "authorized": true
+        },
+        {
+            "device_code": 260059133734,
+            "country_code": 380,
+            "name": "Ribes",
+            "authorized": true
+        },
+        {
+            "device_code": 263002119516,
+            "country_code": 900,
+            "name": "Tigro",
+            "authorized": false
+        },
+        {
+            "device_code": 260160743955,
+            "country_code": 380,
+            "name": "Scheggia",
+            "authorized": true
+        }
+    ]
+}

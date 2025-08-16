@@ -55,11 +55,11 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(gpio_config(&io_conf));
     gpio_set_level(WIFI_LED, LED_OFF); // LED spento all'avvio
 
-    doorModeSemaphore = xSemaphoreCreateMutex();
+    /*doorModeSemaphore = xSemaphoreCreateMutex();
     if (doorModeSemaphore == NULL) {
         ESP_LOGE(TAG, "Impossibile creare il semaforo per door_mode");
         return;
-    }
+    }*/
 
     setup_wifi();  // Wi-Fi init e connessione
 

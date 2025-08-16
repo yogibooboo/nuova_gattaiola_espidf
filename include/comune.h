@@ -1,72 +1,94 @@
 #ifndef COMUNE_H
 #define COMUNE_H
 
+#include <string>
+#include <cstdint>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/semphr.h>
-#include <driver/gpio.h>
-#include <driver/i2c.h>
-#include <string>
+#include <esp_err.h>
+#include <esp_log.h>
+#include <esp_system.h>
+#include <nvs_flash.h>
+#include <esp_spiffs.h>
+#include <driver/gpio.h> // Aggiunto per gpio_num_t
 
-#define APERTO LOW
-#define CHIUSO HIGH
+// Costanti
+#define MAX_CATS 10
+#define LOG_BUFFER_SIZE 100
+#define WIFI_LED GPIO_NUM_6 // Corretto per usare gpio_num_t
 #define LED_ON 0
 #define LED_OFF 1
 
-// Definizione dei pin
-#define PWM_PIN                 GPIO_NUM_14      // RFID Reader
-#define PBLUE                   GPIO_NUM_39      // Pulsante blu per apertura manuale
-#define DETECTED                GPIO_NUM_15      // LED verde rilevato chip
-#define LEDROSSO                GPIO_NUM_7       // LED rosso (porta aperta)
-#define WIFI_LED                GPIO_NUM_6       // LED stato WiFi
-#define LEDBLUE                 GPIO_NUM_5       // IR detected
-#define INFRARED_PIN            GPIO_NUM_3       // Sensore infrarosso della gattaiola
-#define INFRARED_ENABLE         GPIO_NUM_28      // Abilitazione sensore infrarosso
-#define STEP_A_PLUS             GPIO_NUM_21
-#define STEP_A_MINUS            GPIO_NUM_16
-#define STEP_B_PLUS             GPIO_NUM_12
-#define STEP_B_MINUS            GPIO_NUM_13
-#define ENABLE_PIN              GPIO_NUM_37
-#define SERVO_PWM_CHANNEL       0
-#define SERVO_PWM_TIMER         LEDC_TIMER_0
-#define SERVO_PWM_RESOLUTION    16
-#define SERVO_PIN               GPIO_NUM_4
-#define FDX_B_PIN               16
-#define PWM_FREQ                134200
-#define ENCODER_SDA             GPIO_NUM_10
-#define ENCODER_SCL             GPIO_NUM_9
-
-// Definizione dello stato della porta
+// Enumerazioni
 typedef enum {
     AUTO,
     ALWAYS_OPEN,
     ALWAYS_CLOSED
 } DoorMode;
 
-// Dichiarazioni delle variabili globali
-extern int8_t wifi_rssi;  // RSSI corrente Wi-Fi
-extern volatile bool wifi_connected;
-extern volatile DoorMode door_mode;
-extern volatile uint32_t door_sync_count;
-extern volatile uint32_t display_sync_count;
-extern portMUX_TYPE doorModeMux;
-extern SemaphoreHandle_t doorModeSemaphore;
+typedef enum {
+    SERVO,
+    STEP
+} MotorType;
 
-// Strutture dati
+// Struttura per un gatto autorizzato
 typedef struct {
-    char timestamp[20];
-    const char* type;
-    std::string name;
-    uint16_t country_code;
     uint64_t device_code;
+    uint16_t country_code;
+    std::string name;
     bool authorized;
+} Cat;
+
+// Struttura per un'entrata del log
+typedef struct {
+    uint64_t timestamp;
+    uint64_t device_code;
+    uint16_t country_code;
+    bool authorized;
+    char event[32];
 } LogEntry;
 
-#define LOG_BUFFER_SIZE 100
-extern LogEntry log_buffer[LOG_BUFFER_SIZE];
-extern size_t log_buffer_index;
+// Struttura di configurazione
+typedef struct {
+    DoorMode door_mode;
+    uint32_t door_timeout;
+    uint32_t steps_per_movement;
+    uint32_t step_interval_us;
+    uint32_t wifi_reconnect_delay;
+    uint32_t unauthorized_log_interval;
+    bool wifi_verbose_log;
+    MotorType motor_type;
+    uint32_t servo_open_us;
+    uint32_t servo_closed_us;
+    uint32_t servo_transition_ms;
+    uint32_t config_01;
+    uint32_t config_02;
+    uint32_t config_03;
+    uint32_t config_04;
+    uint32_t config_05;
+    uint32_t config_06;
+    uint32_t config_07;
+    uint32_t config_08;
+    uint32_t config_09;
+    uint32_t config_10;
+    uint32_t door_rest;
+    uint32_t door_in;
+    uint32_t door_out;
+    Cat authorized_cats[MAX_CATS];
+    uint8_t num_cats;
+} config_t;
 
-// Dichiarazioni di funzioni
-void save_config();
+// Variabili globali
+extern config_t config;
+extern LogEntry log_buffer[LOG_BUFFER_SIZE];
+extern volatile bool wifi_connected; // Uniformato con volatile
+extern int8_t wifi_rssi;
+extern uint32_t log_count;
+
+// Funzioni
+esp_err_t init_spiffs(void);
+esp_err_t save_config(void);
+esp_err_t load_config(void);
+void clear_log(void);
 
 #endif // COMUNE_H

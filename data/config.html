@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configurazione Gattaiola</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        h1, h2, h3 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .section {
+            margin-bottom: 20px;
+            background-color: #fff;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .sub-section {
+            margin-top: 15px;
+            padding-left: 10px;
+        }
+        .cats-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .cats-table th, .cats-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .cats-table th {
+            background-color: #2c3e50;
+            color: #fff;
+        }
+        .cats-table tr:hover {
+            background-color: #f9f9f9;
+        }
+        .form-group {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+        }
+        label {
+            display: inline-block;
+            width: 200px;
+            font-weight: bold;
+        }
+        input[type="text"], input[type="number"], select {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: 200px;
+        }
+        input[type="checkbox"] {
+            vertical-align: middle;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #2c3e50;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #34495e;
+        }
+        #feedback {
+            margin-top: 10px;
+            color: #2c3e50;
+            font-weight: bold;
+        }
+        @media (max-width: 600px) {
+            .cats-table, input[type="text"], input[type="number"], select {
+                font-size: 14px;
+            }
+            label, input, select {
+                width: 100%;
+                box-sizing: border-box;
+            }
+            .form-group {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Configurazione Gattaiola</h1>
+        
+        <div class="section">
+            <h2>Gestione Gatti Autorizzati</h2>
+            <div class="form-group">
+                <label for="catName">Nome:</label>
+                <input type="text" id="catName" placeholder="Nome del gatto">
+            </div>
+            <div class="form-group">
+                <label for="catDeviceCode">Codice Dispositivo:</label>
+                <input type="text" id="catDeviceCode" placeholder="es. 123456789">
+            </div>
+            <div class="form-group">
+                <label for="catCountryCode">Codice Paese:</label>
+                <input type="number" id="catCountryCode" placeholder="es. 39">
+            </div>
+            <div class="form-group">
+                <label for="catAuthorized">Autorizzato:</label>
+                <input type="checkbox" id="catAuthorized">
+            </div>
+            <button onclick="addCat()">Aggiungi Gatto</button>
+            <table class="cats-table">
+                <thead>
+                    <tr>
+                        <th>Nome</th>
+                        <th>Codice Dispositivo</th>
+                        <th>Codice Paese</th>
+                        <th>Autorizzato</th>
+                        <th>Azioni</th>
+                    </tr>
+                </thead>
+                <tbody id="catsTableBody"></tbody>
+            </table>
+        </div>
+        
+        <div class="section">
+            <h2>Altri Parametri</h2>
+            <div class="form-group">
+                <label for="doorMode">Modalità Porta:</label>
+                <select id="doorMode">
+                    <option value="AUTO">Auto</option>
+                    <option value="ALWAYS_OPEN">Sempre Aperta</option>
+                    <option value="ALWAYS_CLOSED">Sempre Chiusa</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="doorTimeout">Timeout Porta (ms):</label>
+                <input type="number" id="doorTimeout" min="1000">
+            </div>
+            <div class="form-group">
+                <label for="wifiReconnectDelay">Ritardo Riconnessione Wi-Fi (ms):</label>
+                <input type="number" id="wifiReconnectDelay" min="1000">
+            </div>
+            <div class="form-group">
+                <label for="unauthorizedLogInterval">Intervallo Log Non Autorizzati (ms):</label>
+                <input type="number" id="unauthorizedLogInterval" min="1000">
+            </div>
+            <div class="sub-section">
+                <h3>Parametri Motore</h3>
+                <div class="form-group">
+                    <label for="motorType">Tipo Motore:</label>
+                    <select id="motorType">
+                        <option value="step">Step Motor</option>
+                        <option value="servo">Servomotore</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="stepsPerMovement">Passi per Movimento:</label>
+                    <input type="number" id="stepsPerMovement" min="1">
+                </div>
+                <div class="form-group">
+                    <label for="stepIntervalUs">Intervallo Passi (μs):</label>
+                    <input type="number" id="stepIntervalUs" min="100">
+                </div>
+                <div class="form-group">
+                    <label for="servoOpenUs">Posizione Aperta (μs):</label>
+                    <input type="number" id="servoOpenUs" placeholder="2000">
+                </div>
+                <div class="form-group">
+                    <label for="servoClosedUs">Posizione Chiusa (μs):</label>
+                    <input type="number" id="servoClosedUs" placeholder="1000">
+                </div>
+                <div class="form-group">
+                    <label for="servoTransitionMs">Tempo Transizione (ms):</label>
+                    <input type="number" id="servoTransitionMs" placeholder="500">
+                </div>
+            </div>
+            <div class="sub-section">
+                <h3>Parametri Aggiuntivi</h3>
+                <div class="form-group">
+                    <label for="config_01">RTX_B disable =0:</label>
+                    <input type="number" id="config_01" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_02">Soglia porta trig:</label>
+                    <input type="number" id="config_02" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_03">Soglia porta open:</label>
+                    <input type="number" id="config_03" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_04">Door event durata:</label>
+                    <input type="number" id="config_04" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_05">Configurazione 05:</label>
+                    <input type="number" id="config_05" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_06">Configurazione 06:</label>
+                    <input type="number" id="config_06" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_07">Configurazione 07:</label>
+                    <input type="number" id="config_07" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_08">Configurazione 08:</label>
+                    <input type="number" id="config_08" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_09">Configurazione 09:</label>
+                    <input type="number" id="config_09" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="config_10">Configurazione 10:</label>
+                    <input type="number" id="config_10" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="door_rest">Door Rest:</label>
+                    <input type="number" id="door_rest" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="door_in">Door In:</label>
+                    <input type="number" id="door_in" min="0">
+                </div>
+                <div class="form-group">
+                    <label for="door_out">Door Out:</label>
+                    <input type="number" id="door_out" min="0">
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="wifiVerboseLog">Log Wi-Fi Dettagliato:</label>
+                <input type="checkbox" id="wifiVerboseLog">
+            </div>
+            <button onclick="saveConfig()">Salva</button>
+            <button onclick="clearLog()">Cancella Log</button>
+            <button onclick="resetDefaults()">Ripristina Default</button>
+            <button onclick="resetSystem()">Resetta Sistema</button>
+            <div id="feedback"></div>
+        </div>
+    </div>
+    
+    <script>
+        let editingCat = null;
+
+        async function loadConfig() {
+            try {
+                const response = await fetch('/config_data');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                populateCatsTable(data.authorized_cats);
+                document.getElementById('doorMode').value = data.door_mode;
+                document.getElementById('doorTimeout').value = data.DOOR_TIMEOUT;
+                document.getElementById('wifiReconnectDelay').value = data.WIFI_RECONNECT_DELAY;
+                document.getElementById('unauthorizedLogInterval').value = data.UNAUTHORIZED_LOG_INTERVAL;
+                document.getElementById('stepsPerMovement').value = data.STEPS_PER_MOVEMENT;
+                document.getElementById('stepIntervalUs').value = data.STEP_INTERVAL_US;
+                document.getElementById('wifiVerboseLog').checked = data.WIFI_VERBOSE_LOG;
+                document.getElementById('motorType').value = data.motor_type;
+                document.getElementById('servoOpenUs').value = data.servo_open_us;
+                document.getElementById('servoClosedUs').value = data.servo_closed_us;
+                document.getElementById('servoTransitionMs').value = data.servo_transition_ms;
+                document.getElementById('config_01').value = data.config_01;
+                document.getElementById('config_02').value = data.config_02;
+                document.getElementById('config_03').value = data.config_03;
+                document.getElementById('config_04').value = data.config_04;
+                document.getElementById('config_05').value = data.config_05;
+                document.getElementById('config_06').value = data.config_06;
+                document.getElementById('config_07').value = data.config_07;
+                document.getElementById('config_08').value = data.config_08;
+                document.getElementById('config_09').value = data.config_09;
+                document.getElementById('config_10').value = data.config_10;
+                document.getElementById('door_rest').value = data.door_rest;
+                document.getElementById('door_in').value = data.door_in;
+                document.getElementById('door_out').value = data.door_out;
+                showFeedback("Configurazione caricata");
+            } catch (error) {
+                showFeedback("Errore caricamento configurazione: " + error.message);
+            }
+        }
+
+        function populateCatsTable(cats) {
+            const tbody = document.getElementById('catsTableBody');
+            tbody.innerHTML = '';
+            cats.forEach(cat => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td>${cat.name}</td>
+                    <td>${cat.device_code}</td>
+                    <td>${cat.country_code}</td>
+                    <td>${cat.authorized ? 'Sì' : 'No'}</td>
+                    <td>
+                        <button onclick="editCat('${cat.device_code}')">Modifica</button>
+                        <button onclick="deleteCat('${cat.device_code}')">Elimina</button>
+                    </td>
+                `;
+                tbody.appendChild(row);
+            });
+        }
+
+        async function addCat() {
+            const name = document.getElementById('catName').value.trim();
+            const deviceCode = document.getElementById('catDeviceCode').value.trim();
+            const countryCode = parseInt(document.getElementById('catCountryCode').value);
+            const authorized = document.getElementById('catAuthorized').checked;
+
+            if (!name || !deviceCode || isNaN(countryCode)) {
+                showFeedback("Errore: tutti i campi sono obbligatori");
+                return;
+            }
+            if (!/^\d+$/.test(deviceCode)) {
+                showFeedback("Errore: codice dispositivo deve essere numerico");
+                return;
+            }
+
+            const cat = { name, device_code: deviceCode, country_code: countryCode, authorized };
+            if (editingCat) {
+                cat.original_device_code = editingCat;
+            }
+
+            try {
+                const response = await fetch('/config_data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cats: [cat], action: editingCat ? 'update' : 'add' })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    await loadConfig();
+                    showFeedback(editingCat ? "Gatto modificato" : "Gatto aggiunto");
+                    if (editingCat) {
+                        editingCat = null;
+                        document.getElementById('catName').value = '';
+                        document.getElementById('catDeviceCode').value = '';
+                        document.getElementById('catCountryCode').value = '';
+                        document.getElementById('catAuthorized').checked = false;
+                    }
+                } else {
+                    showFeedback("Errore: " + data.error);
+                }
+            } catch (error) {
+                showFeedback("Errore invio dati: " + error.message);
+            }
+        }
+
+        async function editCat(deviceCode) {
+            try {
+                const response = await fetch('/config_data');
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                const cat = data.authorized_cats.find(c => c.device_code === deviceCode);
+                if (cat) {
+                    document.getElementById('catName').value = cat.name;
+                    document.getElementById('catDeviceCode').value = cat.device_code;
+                    document.getElementById('catCountryCode').value = cat.country_code;
+                    document.getElementById('catAuthorized').checked = cat.authorized;
+                    editingCat = deviceCode;
+                    showFeedback("Modifica il gatto e clicca Aggiungi per salvare");
+                }
+            } catch (error) {
+                showFeedback("Errore caricamento gatto: " + error.message);
+            }
+        }
+
+        async function deleteCat(deviceCode) {
+            if (!confirm("Eliminare il gatto?")) return;
+            try {
+                const response = await fetch('/config_data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ cats: [{ device_code: deviceCode }], action: 'delete' })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    await loadConfig();
+                    showFeedback("Gatto eliminato");
+                } else {
+                    showFeedback("Errore: " + data.error);
+                }
+            } catch (error) {
+                showFeedback("Errore eliminazione: " + error.message);
+            }
+        }
+
+        async function saveConfig() {
+            const config = {
+                door_mode: document.getElementById('doorMode').value,
+                DOOR_TIMEOUT: parseInt(document.getElementById('doorTimeout').value),
+                WIFI_RECONNECT_DELAY: parseInt(document.getElementById('wifiReconnectDelay').value),
+                UNAUTHORIZED_LOG_INTERVAL: parseInt(document.getElementById('unauthorizedLogInterval').value),
+                STEPS_PER_MOVEMENT: parseInt(document.getElementById('stepsPerMovement').value),
+                STEP_INTERVAL_US: parseInt(document.getElementById('stepIntervalUs').value),
+                WIFI_VERBOSE_LOG: document.getElementById('wifiVerboseLog').checked,
+                motor_type: document.getElementById('motorType').value,
+                servo_open_us: parseInt(document.getElementById('servoOpenUs').value),
+                servo_closed_us: parseInt(document.getElementById('servoClosedUs').value),
+                servo_transition_ms: parseInt(document.getElementById('servoTransitionMs').value),
+                config_01: parseInt(document.getElementById('config_01').value),
+                config_02: parseInt(document.getElementById('config_02').value),
+                config_03: parseInt(document.getElementById('config_03').value),
+                config_04: parseInt(document.getElementById('config_04').value),
+                config_05: parseInt(document.getElementById('config_05').value),
+                config_06: parseInt(document.getElementById('config_06').value),
+                config_07: parseInt(document.getElementById('config_07').value),
+                config_08: parseInt(document.getElementById('config_08').value),
+                config_09: parseInt(document.getElementById('config_09').value),
+                config_10: parseInt(document.getElementById('config_10').value),
+                door_rest: parseInt(document.getElementById('door_rest').value),
+                door_in: parseInt(document.getElementById('door_in').value),
+                door_out: parseInt(document.getElementById('door_out').value)
+            };
+
+            if (Object.values(config).some(v => isNaN(v) && typeof v !== 'boolean' && typeof v !== 'string')) {
+                showFeedback("Errore: tutti i campi numerici sono obbligatori");
+                return;
+            }
+            if (config.DOOR_TIMEOUT < 1000 || config.WIFI_RECONNECT_DELAY < 1000 || config.UNAUTHORIZED_LOG_INTERVAL < 1000) {
+                showFeedback("Errore: i tempi devono essere >= 1000 ms");
+                return;
+            }
+            if (config.STEPS_PER_MOVEMENT < 1) {
+                showFeedback("Errore: passi per movimento deve essere >= 1");
+                return;
+            }
+            if (config.STEP_INTERVAL_US < 100) {
+                showFeedback("Errore: intervallo passi deve essere >= 100 μs");
+                return;
+            }
+
+            try {
+                const response = await fetch('/config_data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ params: config, action: 'update_params' })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    await loadConfig();
+                    showFeedback("Configurazione salvata");
+                } else {
+                    showFeedback("Errore: " + data.error);
+                }
+            } catch (error) {
+                showFeedback("Errore salvataggio: " + error.message);
+            }
+        }
+
+        async function clearLog() {
+            if (!confirm("Cancellare tutti i log?")) return;
+            try {
+                const response = await fetch('/clear_log', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showFeedback("Log cancellato");
+                } else {
+                    showFeedback("Errore: " + data.error);
+                }
+            } catch (error) {
+                showFeedback("Errore cancellazione log: " + error.message);
+            }
+        }
+
+        async function resetDefaults() {
+            if (!confirm("Ripristinare i parametri ai valori predefiniti?")) return;
+            try {
+                const response = await fetch('/config_data', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'reset_defaults' })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    await loadConfig();
+                    showFeedback("Parametri ripristinati ai valori predefiniti");
+                } else {
+                    showFeedback("Errore: " + data.error);
+                }
+            } catch (error) {
+                showFeedback("Errore ripristino default: " + error.message);
+            }
+        }
+
+        async function resetSystem() {
+            if (!confirm("Riavviare il sistema?")) return;
+            try {
+                const response = await fetch('/reset_system', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showFeedback("Sistema in riavvio...");
+                } else {
+                    showFeedback("Errore: " + data.error);
+                }
+            } catch (error) {
+                showFeedback("Errore riavvio: " + error.message);
+            }
+        }
+
+        function showFeedback(message) {
+            const feedback = document.getElementById('feedback');
+            feedback.textContent = message;
+            setTimeout(() => feedback.textContent = '', 5000);
+        }
+
+        window.onload = loadConfig;
+    </script>
+</body>
+</html>

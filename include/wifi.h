@@ -18,6 +18,6 @@ extern SemaphoreHandle_t doorModeSemaphore;
 // Funzioni per la gestione della configurazione, del WiFi e dei WebSocket
 void setup_wifi();
 void handle_set_door_mode(const char* message);
-void save_config();
+
 
 #endif
