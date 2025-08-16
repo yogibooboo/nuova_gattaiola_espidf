@@ -12,7 +12,6 @@ static const char *TAG = "WIFI";
 
 static httpd_handle_t server = NULL;
 
-
 // === HANDLER ROOT ===
 static esp_err_t root_handler(httpd_req_t *req) {
     const char resp[] = "Server HTTP & WebSocket attivo!";
@@ -104,12 +103,13 @@ static esp_err_t stop_webserver(void) {
     return ESP_OK;
 }
 
-// === EVENTI Wi-Fi ===
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_connected = false;
+        ESP_LOGI(TAG, "Spegne LED Wi-Fi");
+        gpio_set_level(WIFI_LED, 1); // Spegne LED (HIGH)
         esp_wifi_connect();
         ESP_LOGW(TAG, "Connessione WiFi persa, riconnessione...");
         stop_webserver();
@@ -117,7 +117,9 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Connesso! IP: " IPSTR, IP2STR(&event->ip_info.ip));
         wifi_connected = true;
-        start_webserver();
+        ESP_LOGI(TAG, "Accende LED Wi-Fi");
+        gpio_set_level(WIFI_LED, 0); // Accende LED (LOW)
+        // Non chiamare start_webserver();
     }
 }
 

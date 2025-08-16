@@ -27,8 +27,17 @@ LogEntry log_buffer[LOG_BUFFER_SIZE];
 size_t log_buffer_index = 0;
 
 extern "C" void app_main() {
-    //Serial.begin(115200);
     ESP_LOGI(TAG, "Avvio del sistema Pet Door");
+
+    // Inizializzazione pin LED Wi-Fi
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = (1ULL << WIFI_LED);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    gpio_set_level(WIFI_LED, 1); // LED spento all'avvio (HIGH)
 
     doorModeSemaphore = xSemaphoreCreateMutex();
     if (doorModeSemaphore == NULL) {
@@ -36,15 +45,9 @@ extern "C" void app_main() {
         return;
     }
 
-    setup_wifi();
-    // setup_door();
-    // setup_rfid();
-    // start_rfid_task();
+    setup_wifi();  // Wi-Fi init e connessione
 
     xTaskCreate(print_task, "Print_Task", 4096, NULL, 1, NULL);
-
-    // I seguenti task sono commentati per una compilazione minima
-    // xTaskCreatePinnedToCore(core1_task, "Core1_Task", 4096, NULL, 1, NULL, 1);
 }
 
 void print_task(void *pvParameters) {
