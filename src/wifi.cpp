@@ -436,115 +436,129 @@ static esp_err_t ws_handler(httpd_req_t *req) {
 
 static esp_err_t start_webserver(void) {
     ESP_LOGI(TAG, "Avvio del web server...");
+
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.uri_match_fn = httpd_uri_match_wildcard;
+    config.uri_match_fn     = httpd_uri_match_wildcard;
+    config.max_uri_handlers = 24;   // alza se aggiungi altre route
 
-    ESP_LOGI(TAG, "Inizializzazione server HTTP...");
-    if (httpd_start(&server, &config) == ESP_OK) {
-        ESP_LOGI(TAG, "Server HTTP avviato con successo");
-
-        // Regista prima l'handler generico (con la massima specificità)
-        httpd_uri_t generic_uri = {
-            .uri = "/*",
-            .method = HTTP_GET,
-            .handler = static_file_handler,
-            .user_ctx = NULL,
-            .is_websocket = false,
-            .handle_ws_control_frames = NULL,
-            .supported_subprotocol = NULL
-        };
-        ESP_LOGI(TAG, "Registrazione handler generico per /*...");
-        httpd_register_uri_handler(server, &generic_uri);
-        
-        // Regista gli handler specifici dopo
-        httpd_uri_t root_uri = {
-            .uri = "/",
-            .method = HTTP_GET,
-            .handler = static_file_handler,
-            .user_ctx = NULL,
-            .is_websocket = false,
-            .handle_ws_control_frames = NULL,
-            .supported_subprotocol = NULL
-        };
-        ESP_LOGI(TAG, "Registrazione handler statico per /...");
-        httpd_register_uri_handler(server, &root_uri);
-
-        httpd_uri_t config_uri = {
-            .uri = "/config",
-            .method = HTTP_GET,
-            .handler = static_file_handler,
-            .user_ctx = NULL,
-            .is_websocket = false,
-            .handle_ws_control_frames = NULL,
-            .supported_subprotocol = NULL
-        };
-        ESP_LOGI(TAG, "Registrazione handler statico per /config...");
-        httpd_register_uri_handler(server, &config_uri);
-
-        //... (rest of your handlers)
-        // Handler per /config_data (GET e POST)
-        httpd_uri_t config_data_uri = {
-            .uri = "/config_data",
-            .method = HTTP_GET,
-            .handler = config_data_handler,
-            .user_ctx = NULL,
-            .is_websocket = false,
-            .handle_ws_control_frames = NULL,
-            .supported_subprotocol = NULL
-        };
-        httpd_register_uri_handler(server, &config_data_uri);
-        config_data_uri.method = HTTP_POST;
-        httpd_register_uri_handler(server, &config_data_uri);
-
-        //... (rest of your handlers)
-        // Handler per /clear_log
-        httpd_uri_t clear_log_uri = {
-            .uri = "/clear_log",
-            .method = HTTP_POST,
-            .handler = clear_log_handler,
-            .user_ctx = NULL,
-            .is_websocket = false,
-            .handle_ws_control_frames = NULL,
-            .supported_subprotocol = NULL
-        };
-        ESP_LOGI(TAG, "Registrazione handler clear_log...");
-        httpd_register_uri_handler(server, &clear_log_uri);
-
-        //... (rest of your handlers)
-        // Handler per /reset_system
-        httpd_uri_t reset_system_uri = {
-            .uri = "/reset_system",
-            .method = HTTP_POST,
-            .handler = reset_system_handler,
-            .user_ctx = NULL,
-            .is_websocket = false,
-            .handle_ws_control_frames = NULL,
-            .supported_subprotocol = NULL
-        };
-        ESP_LOGI(TAG, "Registrazione handler reset_system...");
-        httpd_register_uri_handler(server, &reset_system_uri);
-
-        // Handler per WebSocket
-        httpd_uri_t ws_uri = {
-            .uri = "/ws",
-            .method = HTTP_GET,
-            .handler = ws_handler,
-            .user_ctx = NULL,
-            .is_websocket = true,
-            .handle_ws_control_frames = true,
-            .supported_subprotocol = NULL
-        };
-        ESP_LOGI(TAG, "Registrazione handler WebSocket...");
-        httpd_register_uri_handler(server, &ws_uri);
-
-        ESP_LOGI(TAG, "Web server completamente configurato");
-    } else {
-        ESP_LOGE(TAG, "Errore nell'avvio del server HTTP");
-        return ESP_FAIL;
+    httpd_handle_t local = nullptr;
+    esp_err_t err = httpd_start(&local, &config);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "httpd_start() fallita: %s", esp_err_to_name(err));
+        return err;
     }
+    server = local;
+
+    // helper per loggare le registrazioni
+    auto method_str = [](httpd_method_t m) {
+        switch (m) {
+            case HTTP_GET:  return "GET";
+            case HTTP_POST: return "POST";
+            case HTTP_PUT:  return "PUT";
+            case HTTP_DELETE:return "DELETE";
+            default:        return "?";
+        }
+    };
+    auto REG = [&](const httpd_uri_t& u) {
+        esp_err_t r = httpd_register_uri_handler(server, &u);
+        if (r == ESP_OK) {
+            ESP_LOGI(TAG, "Handler registrato: %-4s %s", method_str(u.method), u.uri);
+        } else {
+            ESP_LOGE(TAG, "REG FALLITA: %-4s %s -> %s", method_str(u.method), u.uri, esp_err_to_name(r));
+        }
+        return r;
+    };
+
+    // ===== 1) ENDPOINT SPECIFICI (API) =====
+    httpd_uri_t config_data_get = {
+        .uri = "/config_data",
+        .method = HTTP_GET,
+        .handler = config_data_handler,
+        .user_ctx = NULL,
+        .is_websocket = false,
+        .handle_ws_control_frames = NULL,
+        .supported_subprotocol = NULL
+    };
+    REG(config_data_get);
+
+    httpd_uri_t config_data_post = config_data_get;
+    config_data_post.method = HTTP_POST;
+    REG(config_data_post);
+
+    httpd_uri_t clear_log_post = {
+        .uri = "/clear_log",
+        .method = HTTP_POST,
+        .handler = clear_log_handler,
+        .user_ctx = NULL,
+        .is_websocket = false,
+        .handle_ws_control_frames = NULL,
+        .supported_subprotocol = NULL
+    };
+    REG(clear_log_post);
+
+    httpd_uri_t reset_system_post = {
+        .uri = "/reset_system",
+        .method = HTTP_POST,
+        .handler = reset_system_handler,
+        .user_ctx = NULL,
+        .is_websocket = false,
+        .handle_ws_control_frames = NULL,
+        .supported_subprotocol = NULL
+    };
+    REG(reset_system_post);
+
+    // ===== 2) WEBSOCKET =====
+    httpd_uri_t ws_get = {
+        .uri = "/ws",
+        .method = HTTP_GET,
+        .handler = ws_handler,
+        .user_ctx = NULL,
+        .is_websocket = true,
+        .handle_ws_control_frames = true,
+        .supported_subprotocol = NULL
+    };
+    REG(ws_get);
+
+    // ===== 3) STATICI PUNTUALI =====
+    httpd_uri_t root_get = {
+        .uri = "/",
+        .method = HTTP_GET,
+        .handler = static_file_handler,
+        .user_ctx = NULL,
+        .is_websocket = false,
+        .handle_ws_control_frames = NULL,
+        .supported_subprotocol = NULL
+    };
+    REG(root_get);
+
+    httpd_uri_t config_get = {
+        .uri = "/config",
+        .method = HTTP_GET,
+        .handler = static_file_handler,
+        .user_ctx = NULL,
+        .is_websocket = false,
+        .handle_ws_control_frames = NULL,
+        .supported_subprotocol = NULL
+    };
+    REG(config_get);
+
+    // ===== 4) CATCH-ALL STATICO (solo GET) — ALLA FINE =====
+    httpd_uri_t generic_get = {
+        .uri = "/*",
+        .method = HTTP_GET,
+        .handler = static_file_handler,
+        .user_ctx = NULL,
+        .is_websocket = false,
+        .handle_ws_control_frames = NULL,
+        .supported_subprotocol = NULL
+    };
+    REG(generic_get);
+
+    ESP_LOGI(TAG, "Web server completamente configurato");
     return ESP_OK;
 }
+
 
 static void start_webserver_task(void *pvParameters) {
     start_webserver();
