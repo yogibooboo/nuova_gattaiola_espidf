@@ -42,6 +42,9 @@ extern "C" void app_main() {
         ESP_LOGE(TAG, "Errore lettura informazioni SPIFFS: %s (0x%x)", esp_err_to_name(ret), ret);
     }
 
+        // Carica la configurazione da /spiffs/config.json
+    ESP_ERROR_CHECK(load_config());
+
     // Disabilita il watchdog per evitare conflitti (come nel Passo 4)
     ESP_ERROR_CHECK(esp_task_wdt_deinit());
 
