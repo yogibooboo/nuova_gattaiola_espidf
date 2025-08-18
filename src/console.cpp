@@ -9,6 +9,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/timers.h>
+#include "sdkconfig.h"
 
 #include <esp_log.h>
 
@@ -35,7 +36,7 @@
 // Stato interno
 // ============================
 
-static const char* TAGC = "CLI";  // usato solo per printf, non per ESP_LOGx
+//static const char* TAGC = "CLI";  // usato solo per printf, non per ESP_LOGx
 
 static volatile bool s_logs_muted = false;     // true -> log ESP mutati
 static TimerHandle_t s_resume_timer = nullptr; // timer auto-ripristino log
@@ -50,9 +51,20 @@ static int vprintf_router(const char* fmt, va_list ap) {
 }
 
 // API visibili dal resto del progetto
-extern "C" void logs_mute(bool on)   { s_logs_muted = on; }
-extern "C" void logs_resume(void)    { s_logs_muted = false; }
+extern "C" void logs_mute(bool on) {
+    s_logs_muted = on;
+    esp_log_level_set("*", on ? ESP_LOG_NONE
+                              : (esp_log_level_t)CONFIG_LOG_DEFAULT_LEVEL);
+}
+
+extern "C" void logs_resume(void) {
+    s_logs_muted = false;
+    esp_log_level_set("*", (esp_log_level_t)CONFIG_LOG_DEFAULT_LEVEL);
+}
+
 extern "C" bool logs_are_muted(void) { return s_logs_muted; }
+
+
 
 // ============================
 // Utility locali
@@ -74,7 +86,7 @@ static inline void cancel_resume_timer() {
 // NIENTE ESP_LOGx nella callback del timer!
 static void on_resume_timer(TimerHandle_t) {
     // Riattiva semplicemente i log
-    s_logs_muted = false;
+    logs_resume();
 }
 
 // Trim spazi in coda
@@ -127,8 +139,10 @@ static void exec_command(const char* line) {
     if (streq_ci(cmd, "log on")) {
         logs_resume();
         cancel_resume_timer();
+        ESP_LOGI("CLI","test log dopo log on");
         printf("OK: log attivi\n");
         fflush(stdout);
+        
         return;
     }
 
@@ -164,9 +178,11 @@ static void console_task(void*) {
 
     bool paused = false;
     bool printed_prompt = false;
+    bool last_was_cr = false;
+    
     char line[256];
     size_t pos = 0;
-    bool last_was_cr = false;
+    
 
     auto ensure_prompt = [&](){
         if (!printed_prompt){
@@ -191,7 +207,8 @@ static void console_task(void*) {
             paused = false;
             printed_prompt = false;
             pos = 0;
-            printf("\n");                    // riga pulita per il ritorno dei log
+
+                printf("\n");                    // riga pulita per il ritorno dei log
             fflush(stdout);
         }
     };
@@ -230,30 +247,24 @@ static void console_task(void*) {
             rtrim(line);
 
             if (pos == 0) {
-                // INVIO a vuoto: resta in pausa
                 ensure_prompt();
                 schedule_resume_timer();
                 continue;
             }
 
-            // --- NUOVO: fotografiamo cosa ha digitato l'utente
-            bool want_log_on  = streq_ci(line, "log on");
-            bool want_log_off = streq_ci(line, "log off");
-            bool want_help    = streq_ci(line, "help") || streq_ci(line, "?");
+            bool want_log_on = streq_ci(line, "log on");
+            
 
             exec_command(line);
-            pos = 0;  // IMPORTANTISSIMO: azzera sempre il buffer riga
+            pos = 0;
 
-            // --- NUOVO: comportamento esplicito post-comando
             if (want_log_on) {
-                // Uscita immediata dalla pausa: ripartono i log subito
-                leave_paused();
+                leave_paused();              // esci SUBITO: i log ripartono
             } else {
-                // Per help, log off e comandi “normali” restiamo in pausa
                 ensure_prompt();
                 schedule_resume_timer();
             }
-            continue;
+        continue;
         }
 
         
