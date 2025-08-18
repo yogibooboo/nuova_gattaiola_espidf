@@ -5,7 +5,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <ctype.h>
-
+#include "telnet_server.h"  
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/timers.h>
@@ -45,10 +45,29 @@ static TimerHandle_t s_resume_timer = nullptr; // timer auto-ripristino log
 // Router dei log ESP-IDF
 // ============================
 
+
+
 static int vprintf_router(const char* fmt, va_list ap) {
-    if (s_logs_muted) return 0;    // scarta i log quando mutati
-    return vprintf(fmt, ap);       // normale
+    if (s_logs_muted) return 0;
+
+    char buf[512];
+    va_list copy;
+    va_copy(copy, ap);
+    int n = vsnprintf(buf, sizeof(buf), fmt, copy);
+    va_end(copy);
+    if (n < 0) return 0;
+
+    // stampa locale (seriale)
+    fwrite(buf, 1, (size_t) ((n < (int)sizeof(buf)) ? n : (int)sizeof(buf)-1), stdout);
+    fflush(stdout);
+
+    // duplica verso telnet client, se presente
+    if (telnet_has_client()) {
+        telnet_write_best_effort(buf, (size_t)((n < (int)sizeof(buf)) ? n : (int)sizeof(buf)-1));
+    }
+    return n;
 }
+
 
 // API visibili dal resto del progetto
 extern "C" void logs_mute(bool on) {
@@ -160,6 +179,11 @@ static void exec_command(const char* line) {
     printf("ERR: comando sconosciuto. Digita 'help'\n");
     fflush(stdout);
 }
+
+extern "C" void cli_exec_line(const char* line) {
+    exec_command(line);
+}
+
 
 // ============================
 // Task della console

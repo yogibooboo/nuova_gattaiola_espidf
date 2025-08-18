@@ -13,6 +13,7 @@
 #include <nvs_flash.h>
 #include <cJSON.h>
 #include <driver/gpio.h>
+#include "telnet_server.h"
 
 #include "buffers_psram.h"   // <-- pool di buffer in PSRAM
 
@@ -716,12 +717,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         esp_wifi_connect();
         ESP_LOGW(TAG, "Connessione WiFi persa, riconnessione...");
         stop_webserver();
+        telnet_stop();
 
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Connesso! IP: " IPSTR, IP2STR(&event->ip_info.ip));
         wifi_connected = true;
-
+        telnet_start(2323);   // porta di default
         wifi_ap_record_t ap_info;
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
             wifi_rssi = ap_info.rssi;
