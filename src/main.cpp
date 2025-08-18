@@ -8,6 +8,7 @@
 #include <driver/gpio.h>
 #include <esp_task_wdt.h>
 #include <esp_spiffs.h>
+#include "console.h" 
 
 static const char *TAG = "MAIN_APP";
 
@@ -46,7 +47,7 @@ extern "C" void app_main() {
     ESP_ERROR_CHECK(load_config());
 
     // Disabilita il watchdog per evitare conflitti (come nel Passo 4)
-    ESP_ERROR_CHECK(esp_task_wdt_deinit());
+    //ESP_ERROR_CHECK(esp_task_wdt_deinit());
 
     // Inizializzazione pin LED Wi-Fi
     gpio_config_t io_conf = {};
@@ -65,6 +66,7 @@ extern "C" void app_main() {
     }*/
 
     setup_wifi();  // Wi-Fi init e connessione
+    console_start();
 
     xTaskCreate(print_task, "Print_Task", 4096, NULL, 1, NULL);
 }
