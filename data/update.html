@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Aggiornamento OTA</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;margin:24px;line-height:1.4}
+    h1{margin-bottom:8px}
+    .card{border:1px solid #ddd;border-radius:12px;padding:16px;margin:16px 0;box-shadow:0 2px 8px rgba(0,0,0,.05)}
+    .row{display:flex;gap:16px;flex-wrap:wrap}
+    .grow{flex:1 1 300px}
+    .bar{height:10px;background:#eee;border-radius:999px;overflow:hidden;margin-top:8px}
+    .fill{height:100%;width:0;background:#4caf50;transition:width .15s}
+    .status{font-size:.95em;color:#444;margin-top:6px;min-height:1.2em}
+    button{padding:10px 14px;border:0;border-radius:8px;background:#1976d2;color:white;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    input[type=file]{display:block;margin-top:8px}
+  </style>
+</head>
+<body>
+  <h1>Aggiornamento OTA</h1>
+  <p>Seleziona il file e premi Aggiorna. Non spegnere il dispositivo durante l'operazione.</p>
+
+  <div class="row">
+    <!-- FIRMWARE -->
+    <div class="card grow">
+      <h2>Firmware (.bin)</h2>
+      <input id="fwfile" type="file" accept=".bin" />
+      <div class="bar"><div id="fwbar" class="fill"></div></div>
+      <div id="fwstatus" class="status"></div>
+      <button id="fwbtn">Aggiorna firmware</button>
+    </div>
+
+    <!-- SPIFFS -->
+    <div class="card grow">
+      <h2>SPIFFS image (.bin)</h2>
+      <p style="margin:0">Carica l'immagine generata da <code>buildfs</code> (es. <code>spiffs.bin</code>).</p>
+      <input id="fsfile" type="file" accept=".bin" />
+      <div class="bar"><div id="fsbar" class="fill"></div></div>
+      <div id="fsstatus" class="status"></div>
+      <button id="fsbtn">Aggiorna SPIFFS</button>
+    </div>
+  </div>
+
+  <script>
+    function upload(endpoint, file, barEl, statusEl, btnEl) {
+      if (!file) { statusEl.textContent = "Seleziona un file .bin"; return; }
+      barEl.style.width = "0%";
+      statusEl.textContent = "Upload in corso...";
+      btnEl.disabled = true;
+
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", endpoint, true);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          barEl.style.width = pct + "%";
+        }
+      };
+      xhr.onreadystatechange = () => {
+        if (xhr.readyState === 4) {
+          btnEl.disabled = false;
+          try {
+            const res = JSON.parse(xhr.responseText || "{}");
+            if (xhr.status === 200 && res.success) {
+              barEl.style.width = "100%";
+              statusEl.textContent = res.message || "Aggiornamento completato. Riavvio in corso...";
+              // il device probabilmente si riavvia: niente redirect qui
+            } else {
+              statusEl.textContent = (res.error || ("Errore HTTP " + xhr.status));
+            }
+          } catch (_) {
+            statusEl.textContent = "Risposta non valida dal dispositivo";
+          }
+        }
+      };
+      xhr.onerror = () => {
+        btnEl.disabled = false;
+        statusEl.textContent = "Errore di rete";
+      };
+      xhr.send(file);
+    }
+
+    document.getElementById("fwbtn").onclick = () => {
+      const f = document.getElementById("fwfile").files[0];
+      upload("/ota_firmware", f, document.getElementById("fwbar"), document.getElementById("fwstatus"), document.getElementById("fwbtn"));
+    };
+    document.getElementById("fsbtn").onclick = () => {
+      const f = document.getElementById("fsfile").files[0];
+      upload("/ota_spiffs", f, document.getElementById("fsbar"), document.getElementById("fsstatus"), document.getElementById("fsbtn"));
+    };
+  </script>
+</body>
+</html>

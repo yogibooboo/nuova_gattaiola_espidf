@@ -12,6 +12,7 @@
 #include <esp_spiffs.h>
 #include <driver/gpio.h> // Aggiunto per gpio_num_t
 
+
 // Costanti
 #define MAX_CATS 10
 #define LOG_BUFFER_SIZE 100
@@ -91,4 +92,24 @@ esp_err_t save_config(void);
 esp_err_t load_config(void);
 void clear_log(void);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+
+// Monta SPIFFS per il boot: CONSENTE format se fallisce (utile al primo avvio)
+esp_err_t spiffs_mount_boot(void);
+
+// Monta SPIFFS in modalità “rigorosa”: NO format se fallisce (usalo dopo OTA dello SPIFFS)
+esp_err_t spiffs_mount_strict(void);
+
+// Smonta il filesystem
+void spiffs_unmount(void);
+
+// Info spazio
+esp_err_t spiffs_get_info(size_t* total, size_t* used);
+
+#ifdef __cplusplus
+} // extern "C"
+#endif
 #endif // COMUNE_H

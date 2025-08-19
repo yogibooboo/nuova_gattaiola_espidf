@@ -5,6 +5,9 @@
 extern "C" {
 #endif
 
+
+
+
 // Avvia la task di console (CLI su seriale)
 void console_start(void);
 // Esegui una riga di comando (riusata dal telnet)

@@ -3,6 +3,46 @@
 #include <cJSON.h>
 #include <esp_spiffs.h>
 #include <driver/gpio.h> // Aggiunto per sicurezza
+#include <esp_log.h>
+
+static const char* TAGFS = "SPIFFS";
+#define SPIFFS_MAX_FILES 16
+
+static esp_err_t spiffs_mount_internal(bool format_if_mount_failed) {
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = "storage",
+        .max_files = SPIFFS_MAX_FILES,
+        .format_if_mount_failed = format_if_mount_failed
+    };
+    esp_err_t ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        if (ret == ESP_ERR_NOT_FOUND) {
+            ESP_LOGE(TAGFS, "Partizione SPIFFS 'storage' non trovata");
+        } else {
+            ESP_LOGE(TAGFS, "Mount SPIFFS fallito: %s (0x%x)", esp_err_to_name(ret), ret);
+        }
+        return ret;
+    }
+    return ESP_OK;
+}
+
+esp_err_t spiffs_mount_boot(void) {
+    return spiffs_mount_internal(true);   // ok formattare al primo avvio
+}
+
+esp_err_t spiffs_mount_strict(void) {
+    return spiffs_mount_internal(false);  // NO format (usalo dopo scrittura immagine)
+}
+
+void spiffs_unmount(void) {
+    esp_vfs_spiffs_unregister("storage");
+}
+
+esp_err_t spiffs_get_info(size_t* total, size_t* used) {
+    return esp_spiffs_info("storage", total, used);
+}
+
 
 static const char *TAG = "COMUNE";
 
@@ -18,7 +58,7 @@ esp_err_t init_spiffs(void) {
     esp_vfs_spiffs_conf_t conf = {
         .base_path = "/spiffs",
         .partition_label = NULL,
-        .max_files = 5,
+        .max_files = SPIFFS_MAX_FILES,
         .format_if_mount_failed = true
     };
 

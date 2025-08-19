@@ -17,6 +17,9 @@
 
 #include "buffers_psram.h"   // <-- pool di buffer in PSRAM
 
+#include <esp_ota_ops.h>    // esp_ota_begin/write/end, set_boot_partition, get_next_update_partition
+#include <esp_partition.h>  // esp_partition_find_first/erase_range/write per SPIFFS
+
 static const char *TAG = "WIFI";
 static httpd_handle_t server = NULL;
 
@@ -61,6 +64,8 @@ static esp_err_t static_file_handler(httpd_req_t *req) {
         snprintf(filepath, sizeof(filepath), "/spiffs/index.html");
     } else if (strcmp(uri, "/config") == 0) {
         snprintf(filepath, sizeof(filepath), "/spiffs/config.html");
+    } else if (strcmp(uri, "/update") == 0) {
+        snprintf(filepath, sizeof(filepath), "/spiffs/update.html");
     } else {
         snprintf(filepath, sizeof(filepath), "/spiffs%s", uri);
     }
@@ -444,6 +449,215 @@ static esp_err_t config_data_handler(httpd_req_t *req) {
     return ESP_FAIL;
 }
 
+// ota_firmware_handler
+static esp_err_t ota_firmware_handler(httpd_req_t* req) {
+    if (req->method != HTTP_POST) {
+        httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Metodo non permesso");
+        return ESP_FAIL;
+    }
+
+    // Partizione di destinazione
+    const esp_partition_t* update_part = esp_ota_get_next_update_partition(nullptr);
+    if (!update_part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Nessuna partizione OTA");
+        return ESP_FAIL;
+    }
+
+    // (opzionale) controllo Content-Length
+    if (req->content_len <= 0 || req->content_len > (int)update_part->size) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Dimensione non valida");
+        return ESP_FAIL;
+    }
+
+    esp_ota_handle_t ota = 0;
+    esp_err_t err = esp_ota_begin(update_part, OTA_SIZE_UNKNOWN, &ota);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_begin fallita");
+        return ESP_FAIL;
+    }
+
+    // buffer in PSRAM se disponibile
+    const size_t CHUNK = 16 * 1024;
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(CHUNK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) buf = (uint8_t*)malloc(CHUNK);
+    if (!buf) {
+        esp_ota_end(ota);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "alloc fallita");
+        return ESP_FAIL;
+    }
+
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int to_read = remaining > (int)CHUNK ? (int)CHUNK : remaining;
+        int r = httpd_req_recv(req, (char*)buf, to_read);
+        if (r <= 0) {
+            free(buf);
+            esp_ota_end(ota);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ricezione fallita");
+            return ESP_FAIL;
+        }
+        err = esp_ota_write(ota, buf, r);
+        if (err != ESP_OK) {
+            free(buf);
+            esp_ota_end(ota);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "scrittura OTA fallita");
+            return ESP_FAIL;
+        }
+        remaining -= r;
+        // lascia respirare il WDT cooperativo
+        vTaskDelay(1);
+    }
+    free(buf);
+
+    if ((err = esp_ota_end(ota)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ota_end fallita");
+        return ESP_FAIL;
+    }
+    if ((err = esp_ota_set_boot_partition(update_part)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "set_boot fallita");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"OTA firmware OK. Riavvio...\"}");
+
+    // breve delay per permettere al client di ricevere la risposta
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
+
+// ota_spiffs_handler
+
+static esp_err_t ota_spiffs_handler(httpd_req_t* req) {
+    if (req->method != HTTP_POST) {
+        httpd_resp_send_err(req, HTTPD_405_METHOD_NOT_ALLOWED, "Metodo non permesso");
+        return ESP_FAIL;
+    }
+
+    const esp_partition_t* part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_SPIFFS, "storage");
+    if (!part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Partizione SPIFFS non trovata");
+        return ESP_FAIL;
+    }
+
+    if (req->content_len <= 0 || req->content_len > (int)part->size) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Dimensione immagine non valida");
+        return ESP_FAIL;
+    }
+
+    // 1) Smonta il FS (niente accessi concorrenti)
+    spiffs_unmount();
+
+    // 2) Preparazione buffer
+    const size_t CHUNK = 16 * 1024;
+    uint8_t* buf = (uint8_t*)heap_caps_malloc(CHUNK, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) buf = (uint8_t*)malloc(CHUNK);
+    if (!buf) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "alloc fallita");
+        return ESP_FAIL;
+    }
+
+    // 3) Cancella man mano (erase step) e scrivi i chunk ricevuti
+    size_t offset = 0;
+    int remaining = req->content_len;
+
+    // tener traccia di quanto abbiamo già cancellato (allineato a 4K)
+    size_t erased_until = 0;
+    const size_t ERASE_STEP = 64 * 1024; // cancella in step da 64KiB per ridurre pause lunghe
+
+    while (remaining > 0) {
+        int to_read = remaining > (int)CHUNK ? (int)CHUNK : remaining;
+        int r = httpd_req_recv(req, (char*)buf, to_read);
+        if (r <= 0) {
+            free(buf);
+            // in caso di errore, prova un mount rigoroso per lasciare il sistema vivo
+            spiffs_mount_strict();
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "ricezione fallita");
+            return ESP_FAIL;
+        }
+
+        // Assicura che l'area da scrivere sia cancellata
+        size_t need_end = offset + r;
+        // arrotonda l'area da cancellare a multipli di 4KiB
+        if (need_end > erased_until) {
+            size_t erase_to = need_end;
+            // cancella a step per non bloccare troppo
+            while (erased_until < erase_to && erased_until < part->size) {
+                size_t step = ERASE_STEP;
+                if (erased_until + step > part->size) step = part->size - erased_until;
+                // allinea lo start a 4KiB
+                size_t aligned_start = erased_until & ~((size_t)0xFFF);
+                // allinea la lunghezza a multipli di 4KiB
+                size_t aligned_len = (step + (erased_until - aligned_start) + 0xFFF) & ~((size_t)0xFFF);
+                if (aligned_start + aligned_len > part->size) {
+                    aligned_len = part->size - aligned_start;
+                }
+                if (esp_partition_erase_range(part, aligned_start, aligned_len) != ESP_OK) {
+                    free(buf);
+                    spiffs_mount_strict();
+                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Erase fallito");
+                    return ESP_FAIL;
+                }
+                erased_until = aligned_start + aligned_len;
+                vTaskDelay(1); // lascia respirare il WDT/stack TCP
+            }
+        }
+
+        // Scrivi il pezzo
+        if (esp_partition_write(part, offset, buf, r) != ESP_OK) {
+            free(buf);
+            spiffs_mount_strict();
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "scrittura SPIFFS fallita");
+            return ESP_FAIL;
+        }
+
+        offset += r;
+        remaining -= r;
+
+        // feed cooperativo
+        vTaskDelay(1);
+    }
+
+    // 4) Se l'immagine è più piccola della partizione, cancella la "coda" residua
+    //    per evitare sporcizia che potrebbe confondere SPIFFS
+    if (offset < part->size) {
+        size_t tail_start = (offset + 0xFFF) & ~((size_t)0xFFF); // allinea a 4KiB
+        if (tail_start < part->size) {
+            size_t tail_len = part->size - tail_start;
+            // Erase a step per non bloccare per troppo
+            size_t done = 0;
+            while (done < tail_len) {
+                size_t step = ERASE_STEP;
+                if (done + step > tail_len) step = tail_len - done;
+                if (esp_partition_erase_range(part, tail_start + done, step) != ESP_OK) {
+                    // non è critico per la leggibilità dell'immagine, ma meglio saperlo
+                    // rimonta e rispondi errore
+                    spiffs_mount_strict();
+                    httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Erase coda fallito");
+                    return ESP_FAIL;
+                }
+                done += step;
+                vTaskDelay(1);
+            }
+        }
+    }
+
+    free(buf);
+
+    // 5) Rispondi e riavvia
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, "{\"success\":true,\"message\":\"SPIFFS aggiornato. Riavvio...\"}");
+
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
+
+
 // =====================================
 // /clear_log (POST)
 // =====================================
@@ -571,6 +785,9 @@ static esp_err_t start_webserver(void) {
     config.max_uri_handlers = 24;
     config.stack_size       = 8192;   // più respiro per gli handler
 
+    config.recv_wait_timeout = 60;  // attesa massima per ricevere il body (es. upload)
+    config.send_wait_timeout = 60;  // attesa massima per inviare la risposta
+
     httpd_handle_t local = nullptr;
     esp_err_t err = httpd_start(&local, &config);
     if (err != ESP_OK) {
@@ -670,6 +887,35 @@ static esp_err_t start_webserver(void) {
         .supported_subprotocol = NULL
     };
     REG(config_get);
+
+
+
+        // POST /ota_firmware
+    httpd_uri_t ota_fw_post = {
+        .uri = "/ota_firmware",
+        .method = HTTP_POST,
+        .handler = ota_firmware_handler,
+        .user_ctx = NULL
+    };
+    REG(ota_fw_post);
+
+    // POST /ota_spiffs
+    httpd_uri_t ota_fs_post = {
+        .uri = "/ota_spiffs",
+        .method = HTTP_POST,
+        .handler = ota_spiffs_handler,
+        .user_ctx = NULL
+    };
+    REG(ota_fs_post);
+
+    // GET /update -> serve la pagina
+    httpd_uri_t update_get = {
+        .uri = "/update",
+        .method = HTTP_GET,
+        .handler = static_file_handler,
+        .user_ctx = NULL
+    };
+    REG(update_get);
 
     // ===== 4) CATCH-ALL STATICO (solo GET) — ALLA FINE =====
     httpd_uri_t generic_get = {

@@ -47,6 +47,38 @@ static TimerHandle_t s_resume_timer = nullptr; // timer auto-ripristino log
 
 
 
+static void cli_write_both(const char* s, size_t len) {
+    // seriale
+    fwrite(s, 1, len, stdout);
+    fflush(stdout);
+
+    // telnet (con LF -> CRLF)
+    if (telnet_has_client()) {
+        size_t start = 0;
+        for (size_t i = 0; i < len; ++i) {
+            if (s[i] == '\n') {
+                if (i > start) telnet_write_best_effort(s + start, i - start);
+                telnet_write_best_effort("\r\n", 2);
+                start = i + 1;
+            }
+        }
+        if (start < len) telnet_write_best_effort(s + start, len - start);
+    }
+}
+
+static void cli_puts(const char* s) { cli_write_both(s, strlen(s)); }
+
+static void cli_printf(const char* fmt, ...) {
+    char b[512];
+    va_list ap; va_start(ap, fmt);
+    int n = vsnprintf(b, sizeof(b), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    size_t len = (size_t)((n < (int)sizeof(b)) ? n : (int)sizeof(b));
+    cli_write_both(b, len);
+}
+
+
 static int vprintf_router(const char* fmt, va_list ap) {
     if (s_logs_muted) return 0;
 
@@ -58,12 +90,25 @@ static int vprintf_router(const char* fmt, va_list ap) {
     if (n < 0) return 0;
 
     // stampa locale (seriale)
-    fwrite(buf, 1, (size_t) ((n < (int)sizeof(buf)) ? n : (int)sizeof(buf)-1), stdout);
+    size_t to_write = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
+    fwrite(buf, 1, to_write, stdout);
     fflush(stdout);
 
-    // duplica verso telnet client, se presente
+    // duplica verso telnet client, con conversione LF -> CRLF
     if (telnet_has_client()) {
-        telnet_write_best_effort(buf, (size_t)((n < (int)sizeof(buf)) ? n : (int)sizeof(buf)-1));
+        size_t start = 0;
+        for (size_t i = 0; i < to_write; ++i) {
+            if (buf[i] == '\n') {
+                if (i > start) {
+                    telnet_write_best_effort(buf + start, i - start);
+                }
+                telnet_write_best_effort("\r\n", 2);
+                start = i + 1;
+            }
+        }
+        if (start < to_write) {
+            telnet_write_best_effort(buf + start, to_write - start);
+        }
     }
     return n;
 }
@@ -130,11 +175,12 @@ static bool streq_ci(const char* a, const char* b) {
 // ============================
 
 static void print_help() {
-    printf("\nComandi disponibili:\n");
-    printf("  help            - mostra questo aiuto\n");
-    printf("  log on          - riattiva i log\n");
-    printf("  log off         - mette in pausa i log (resta nel prompt)\n");
-    printf("\nSuggerimento: premi INVIO a vuoto per mettere in pausa i log e scrivere comandi.\n\n");
+    cli_puts("\nComandi disponibili:\n");
+    cli_puts("  help            - mostra questo aiuto\n");
+    cli_puts("  log on          - riattiva i log\n");
+    cli_puts("  log off         - mette in pausa i log (resta nel prompt)\n");
+    cli_puts("\nSuggerimento: premi INVIO a vuoto per mettere in pausa i log e scrivere comandi.\n\n");
+
     fflush(stdout);
 }
 
@@ -159,7 +205,7 @@ static void exec_command(const char* line) {
         logs_resume();
         cancel_resume_timer();
         ESP_LOGI("CLI","test log dopo log on");
-        printf("OK: log attivi\n");
+        cli_puts("OK: log attivi\n");
         fflush(stdout);
         
         return;
@@ -168,7 +214,7 @@ static void exec_command(const char* line) {
     if (streq_ci(cmd, "log off")) {
         logs_mute(true);
         schedule_resume_timer();
-        printf("OK: log in pausa\n");
+        cli_puts("OK: log in pausa\n");
         fflush(stdout);
         return;
     }
@@ -176,13 +222,14 @@ static void exec_command(const char* line) {
     // Qui puoi aggiungere altri comandi: es. "reset", "door open", ecc.
 
     // Default: comando sconosciuto
-    printf("ERR: comando sconosciuto. Digita 'help'\n");
+    cli_puts("ERR: comando sconosciuto. Digita 'help'\n");
     fflush(stdout);
 }
 
 extern "C" void cli_exec_line(const char* line) {
     exec_command(line);
 }
+
 
 
 // ============================
