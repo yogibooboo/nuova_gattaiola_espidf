@@ -2,7 +2,7 @@
 
 # Registra il componente principale
 idf_component_register(
-    SRCS "main.cpp" "wifi.cpp" "comune.cpp" "console.cpp" "buffers.psram.cpp" "telnet_server.cpp"
+    SRCS "main.cpp" "wifi.cpp" "comune.cpp" "console.cpp" "buffers.psram.cpp" "telnet_server.cpp" "time_sync.cpp" "core1.cpp"
     INCLUDE_DIRS "../include"
     REQUIRES esp_http_server esp_wifi nvs_flash spiffs
 )

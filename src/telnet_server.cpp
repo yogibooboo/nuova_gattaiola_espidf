@@ -224,7 +224,13 @@ static void listener_task(void* pv) {
         }
 
         s_client_sock = sock;
-        xTaskCreate(session_task, "telnet_session", TELNET_STACK, nullptr, TELNET_PRIO, &s_session_task);
+        xTaskCreatePinnedToCore(
+            session_task, "telnet_session",
+            TELNET_STACK, nullptr,
+            TELNET_PRIO, &s_session_task,
+        0 /* core 0 */
+        );
+
     }
 
     if (s_listen_sock >= 0) {
@@ -243,7 +249,12 @@ static void listener_task(void* pv) {
 void telnet_start(int port) {
     if (s_listener_task) return;
     s_running = true;
-    xTaskCreate(listener_task, "telnet_listen", TELNET_STACK, (void*)(intptr_t)port, TELNET_PRIO, &s_listener_task);
+    xTaskCreatePinnedToCore(
+    listener_task, "telnet_listen",
+    TELNET_STACK, (void*)(intptr_t)port,
+    TELNET_PRIO, &s_listener_task,
+    0 /* core 0 */
+);
 }
 
 void telnet_stop(void) {

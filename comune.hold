@@ -22,11 +22,11 @@
 #define LEDBLUE                 GPIO_NUM_5       // IR detected
 #define INFRARED_PIN            GPIO_NUM_3       // Sensore infrarosso della gattaiola
 #define INFRARED_ENABLE         GPIO_NUM_28      // Abilitazione sensore infrarosso
-#define STEP_A_PLUS             GPIO_NUM_21
-#define STEP_A_MINUS            GPIO_NUM_16
-#define STEP_B_PLUS             GPIO_NUM_12
-#define STEP_B_MINUS            GPIO_NUM_13
-#define ENABLE_PIN              GPIO_NUM_37
+//#define STEP_A_PLUS             GPIO_NUM_21
+//#define STEP_A_MINUS            GPIO_NUM_16
+//#define STEP_B_PLUS             GPIO_NUM_12
+//#define STEP_B_MINUS            GPIO_NUM_13
+//#define ENABLE_PIN              GPIO_NUM_37
 #define SERVO_PWM_CHANNEL       0
 #define SERVO_PWM_TIMER         LEDC_TIMER_0
 #define SERVO_PWM_RESOLUTION    16

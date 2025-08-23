@@ -19,6 +19,7 @@
 
 #include <esp_ota_ops.h>    // esp_ota_begin/write/end, set_boot_partition, get_next_update_partition
 #include <esp_partition.h>  // esp_partition_find_first/erase_range/write per SPIFFS
+#include "time_sync.h"
 
 static const char *TAG = "WIFI";
 static httpd_handle_t server = NULL;
@@ -780,6 +781,7 @@ static esp_err_t start_webserver(void) {
     ESP_LOGI(TAG, "Avvio del web server...");
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.core_id = 0;
     config.lru_purge_enable = true;
     config.uri_match_fn     = httpd_uri_match_wildcard;
     config.max_uri_handlers = 24;
@@ -964,6 +966,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         ESP_LOGW(TAG, "Connessione WiFi persa, riconnessione...");
         stop_webserver();
         telnet_stop();
+        time_sync_stop();  // opzionale; se lo lasci attivo fallirà e riproverà
 
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
@@ -981,9 +984,13 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         ESP_LOGI(TAG, "Accende LED Wi-Fi");
         gpio_set_level(WIFI_LED, LED_ON);
 
+        // Avvio SNTP (time sync) all'ottenimento dell'IP
+        time_sync_start();
+
         // Avvia il webserver fuori dal callback (task dedicata), solo se non già avviato
         if (!server) {
-            xTaskCreate(start_webserver_task, "WebServerTask", 6144, NULL, 5, NULL);
+            xTaskCreatePinnedToCore(start_webserver_task, "WebServerTask",
+                        4096, nullptr, 5, nullptr, 0);
         }
     }
 }

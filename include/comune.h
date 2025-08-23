@@ -16,7 +16,12 @@
 // Costanti
 #define MAX_CATS 10
 #define LOG_BUFFER_SIZE 100
-#define WIFI_LED GPIO_NUM_6 // Corretto per usare gpio_num_t
+
+#define WIFI_LED    GPIO_NUM_6 
+#define PWM_PIN     GPIO_NUM_14 
+#define FDX_B_PIN   GPIO_NUM_16
+#define ADC_PIN     GPIO_NUM_4
+
 #define LED_ON 0
 #define LED_OFF 1
 

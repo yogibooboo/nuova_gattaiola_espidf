@@ -12,6 +12,9 @@
 #include "sdkconfig.h"
 
 #include <esp_log.h>
+#include <time.h>   // <-- necessario per time_t, time(), localtime_r(), strftime()
+#include "time_sync.h"
+
 
 // ============================
 // Configurazione console
@@ -219,6 +222,57 @@ static void exec_command(const char* line) {
         return;
     }
 
+
+// ...
+
+    if (streq_ci(cmd, "time")) {
+        time_t now = 0;
+        time(&now);
+        struct tm lt; localtime_r(&now, &lt);
+
+        char buf[64];
+        strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &lt);
+
+        cli_puts("Ora locale: ");
+        cli_puts(buf);
+        cli_puts("\n");
+
+        cli_puts("Epoch: ");
+        char eb[32]; snprintf(eb, sizeof(eb), "%ld\n", (long)now);
+        cli_puts(eb);
+
+        cli_puts("Valid sync: ");
+        cli_puts(time_sync_is_valid() ? "yes\n" : "no\n");
+        return;
+    }
+
+    if (streq_ci(cmd, "ntp now")) {
+        time_sync_force();
+        cli_puts("Forzato un tentativo di sincronizzazione.\n");
+        return;
+    }
+
+    if (streq_ci(cmd, "ntp status")) {
+        cli_puts("Ultimo server: ");
+        cli_puts(time_sync_server_used());
+        cli_puts("\n");
+
+        time_t last = time_sync_last_epoch();
+        if (last > 0) {
+            struct tm lt; localtime_r(&last, &lt);
+            char buf[64];
+            strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &lt);
+            cli_puts("Ultimo sync: ");
+            cli_puts(buf);
+            cli_puts("\n");
+        } else {
+            cli_puts("Ultimo sync: n/a\n");
+        }
+        cli_puts("Valido: ");
+        cli_puts(time_sync_is_valid() ? "yes\n" : "no\n");
+        return;
+    }
+
     // Qui puoi aggiungere altri comandi: es. "reset", "door open", ecc.
 
     // Default: comando sconosciuto
@@ -387,5 +441,10 @@ extern "C" void console_start(void) {
     }
 
     // Crea la task della console
-    xTaskCreate(console_task, "console", CONSOLE_TASK_STACK, nullptr, CONSOLE_TASK_PRIO, nullptr);
+   xTaskCreatePinnedToCore(
+    console_task, "console",
+    CONSOLE_TASK_STACK, nullptr,
+    CONSOLE_TASK_PRIO, nullptr,
+    0 /* core 0 */
+    );
 }
