@@ -10,7 +10,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-
+#include <driver/gptimer.h>
 #include <ctime>   // time_t, localtime_r, strftime
 #include <inttypes.h>
 #include <cstdio>  // <-- aggiunto per printf
@@ -35,6 +35,15 @@ static rmt_encoder_handle_t s_copy_encoder = nullptr;
 static constexpr uint32_t RMT_RES_HZ   = 40'000'000;
 static constexpr uint32_t PERIOD_TICKS = 298;                    // 7.45 us
 static constexpr uint16_t HALF_TICKS   = PERIOD_TICKS / 2;       // 149
+
+
+// ---------- FDX-B test sequence (128 bit), identica ad Arduino ----------
+static const uint8_t fdx_b_sequence[128] = {
+    0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,1,0,1,0,1,1,0,1,1,1,0,1,1,1,1,0,1,
+    0,0,1,0,0,1,0,0,1,1,1,1,0,0,1,1,0,1,1,1,1,0,0,1,1,0,0,0,0,1,1,1,
+    1,1,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,1,1,0,0,1,1,1,0,0,0,1,1,0,0,1,
+    0,0,1,1,1,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,0,1,0,1,0,1,0,1,1
+};
 
 // Avvia la portante in loop infinito (duty 50%)
 static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)PWM_PIN)
@@ -99,6 +108,80 @@ static void pwm134_stop(void)
 
 // ============================================================================
 
+// ---------- FDX-B test (GPTimer) ----------
+
+
+// In Arduino: timer @ 2.5 MHz, HALF_BIT_TICKS=298 → 119.2 µs
+// Qui replichiamo identico: GPTimer @ 2.5 MHz, allarme ogni 298 tick
+#define FDX_TIMER_RES_HZ    2500000
+#define FDX_HALF_TICKS      298
+
+static gptimer_handle_t s_fdx_timer = nullptr;
+static volatile uint32_t s_fdx_bit_index = 0;      // 0..255 (2 half per bit)
+static volatile bool     s_fdx_last_half_value = false;
+
+static bool IRAM_ATTR fdx_on_alarm_cb(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*)
+{
+    // stesso schema Arduino:
+    // - ogni interrupt è un "half-bit"
+    // - bit = fdx_b_sequence[index/2]
+    // - Manchester: la seconda metà dipende dal bit (inverti o ripeti la semionda)
+    uint32_t idx = s_fdx_bit_index;
+    uint8_t bit = fdx_b_sequence[idx >> 1]; // /2
+
+    bool first_half_value = !s_fdx_last_half_value;
+    if ((idx & 1) == 0) {
+        // prima metà
+        gpio_set_level(FDX_B_PIN, first_half_value);
+    } else {
+        // seconda metà
+        bool second_half_value = (bit == 0) ? !first_half_value : first_half_value;
+        gpio_set_level(FDX_B_PIN, second_half_value);
+        s_fdx_last_half_value = second_half_value;
+    }
+    s_fdx_bit_index = (idx + 1) & 0xFF; // %256
+    return true; // riattiva l'allarme auto-reload
+}
+
+static esp_err_t start_fdx_test_if_enabled(void)
+{
+    if (config.config_01 == 0) {
+        ESP_LOGI(TAG, "FDX-B test disabilitato (config_01=0)");
+        return ESP_OK;
+    }
+
+    // GPIO output
+    gpio_config_t io = {};
+    io.pin_bit_mask = (1ULL << FDX_B_PIN);
+    io.mode = GPIO_MODE_OUTPUT;
+    io.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io.pull_up_en = GPIO_PULLUP_DISABLE;
+    io.intr_type = GPIO_INTR_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&io));
+    gpio_set_level(FDX_B_PIN, 0);
+
+    // GPTimer @ 2.5 MHz
+    gptimer_config_t tcfg = {};
+    tcfg.clk_src = GPTIMER_CLK_SRC_DEFAULT;
+    tcfg.direction = GPTIMER_COUNT_UP;
+    tcfg.resolution_hz = FDX_TIMER_RES_HZ;
+    ESP_ERROR_CHECK(gptimer_new_timer(&tcfg, &s_fdx_timer));
+
+    gptimer_event_callbacks_t cbs = {};
+    cbs.on_alarm = fdx_on_alarm_cb;
+    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_fdx_timer, &cbs, nullptr));
+    ESP_ERROR_CHECK(gptimer_enable(s_fdx_timer));
+
+    gptimer_alarm_config_t acfg = {};
+    acfg.reload_count = 0;
+    acfg.alarm_count = FDX_HALF_TICKS; // 298 tick @2.5MHz = 119.2 µs
+    acfg.flags.auto_reload_on_alarm = true;
+    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_fdx_timer, &acfg));
+    ESP_ERROR_CHECK(gptimer_start(s_fdx_timer));
+
+    ESP_LOGI(TAG, "FDX-B test attivo (half-bit=%u tick @ %u Hz)", FDX_HALF_TICKS, FDX_TIMER_RES_HZ);
+    return ESP_OK;
+}
 
 
 
@@ -189,6 +272,9 @@ extern "C" void app_main()
 
     // === Avvia la portante RFID 134.2 kHz (RMT v2, hardware, jitter ~0) ===
     ESP_ERROR_CHECK(pwm134_start());
+
+    // Avvia FDX-B test (GPTimer) se abilitato da config.config_01
+    ESP_ERROR_CHECK(start_fdx_test_if_enabled());
 
     start_rfid_task();   // crea task su core 1 e avvia il GPTimer per l’ADC
 

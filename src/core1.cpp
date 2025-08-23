@@ -1,6 +1,6 @@
 // core1.cpp — versione corretta con calibrazione ADC
 #include "core1.h"
-
+#include "comune.h"
 #include <string.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -13,6 +13,7 @@
 #include "soc/sens_reg.h"
 #include "soc/sens_struct.h"
 #include "hal/adc_hal.h"
+#include <esp_timer.h>
 
 // ================== Variabili globali ==================
 volatile bool     buffer_ready = false;
@@ -145,13 +146,23 @@ static gptimer_handle_t s_adc_timer = nullptr;
 
 // ISR produttore (identica alla tua)
 void IRAM_ATTR onTimer(void) {
+    gpio_set_level(TEST_ADC, 1); // Debug: toggle alto
     if (!fadcBusy()) {
         uint16_t s = fadcResult();
         datoadc = s;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
         fadcStart(3); // CH3 (GPIO4)
+        gpio_set_level(TEST_ADC, 0); // Debug: 
+        
+    } else {
+        
+        uint16_t s=adc_buffer[(i_interrupt-2) & 0x3FFF];  //in caso di errore mette una "pezza"
+        adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
+        adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
+    
     }
+    
 }
 
 static bool IRAM_ATTR adc_timer_cb(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*) {
@@ -189,8 +200,156 @@ static void media_correlazione_32() {
         const int soglia_mezzo_bit=25;
 
         if (ia >= (uint32_t)lunghezza_correlazione) {
-            // [Tutto il resto del tuo codice di analisi rimane identico]
-            // ... (omesso per brevità, ma è identico al tuo)
+            // Filtro mobile
+            filt[ ia        & (CORR_BUFFER_SIZE - 1)] =
+                filt[(ia-1)  & (CORR_BUFFER_SIZE - 1)]
+              - (int32_t)adc_buffer[(ia-4) & 0x3FFF] / larghezza_finestra
+              + (int32_t)adc_buffer[(ia+3) & 0x3FFF] / larghezza_finestra;
+
+            // “Correlazione” (2^ derivata)
+            corr[(ia-16) & (CORR_BUFFER_SIZE - 1)] =
+                corr[(ia-17) & (CORR_BUFFER_SIZE - 1)]
+              - filt[(ia-32) & (CORR_BUFFER_SIZE - 1)]
+              + 2 * filt[(ia-16) & (CORR_BUFFER_SIZE - 1)]
+              -     filt[ ia     & (CORR_BUFFER_SIZE - 1)];
+
+            newbit = 2; numbit = 0; newpeak = false;
+
+            // Peak picking alternato
+            if (stato == 1) {
+                max_i  = imax(corr[(ia-16) & (CORR_BUFFER_SIZE - 1)], max_i);
+                max_i8 = imax(corr[(ia-24) & (CORR_BUFFER_SIZE - 1)], max_i8);
+                if ((max_i == max_i8) && (max_i != max_i_iniziale)) {
+                    peaks[num_picchi & 0xFF] = (int32_t)ia - 24;
+                    num_picchi++;
+                    stato = -1;
+                    min_i = corr[(ia-16) & (CORR_BUFFER_SIZE - 1)];
+                    min_i8 = corr[(ia-24) & (CORR_BUFFER_SIZE - 1)];
+                    min_i_iniziale = min_i8;
+                    newpeak = true;
+                }
+            } else {
+                min_i  = imin(corr[(ia-16) & (CORR_BUFFER_SIZE - 1)], min_i);
+                min_i8 = imin(corr[(ia-24) & (CORR_BUFFER_SIZE - 1)], min_i8);
+                if ((min_i == min_i8) && (min_i != min_i_iniziale)) {
+                    peaks[num_picchi & 0xFF] = (int32_t)ia - 24;
+                    num_picchi++;
+                    stato = 1;
+                    max_i = corr[(ia-16) & (CORR_BUFFER_SIZE - 1)];
+                    max_i8 = corr[(ia-24) & (CORR_BUFFER_SIZE - 1)];
+                    max_i_iniziale = max_i8;
+                    newpeak = true;
+                }
+            }
+
+            // Distanze/bit
+            if (num_picchi > 1 && newpeak) {
+                ultima_distanza = peaks[(num_picchi - 1) & 0xFF] - peaks[(num_picchi - 2) & 0xFF];
+                dist[num_distanze & 0xFF] = ultima_distanza;
+                num_distanze++;
+
+                if (stato_decodifica == 0) {
+                    if (ultima_distanza >= soglia_mezzo_bit) {
+                        bits[num_bits & 0xFF].value = 1;
+                        bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
+                        num_bits++; newbit = 1; numbit = 1;
+                    } else {
+                        stato_decodifica = 1;
+                    }
+                } else if (stato_decodifica == 1) {
+                    confro = 42;
+                    if (bits[(num_bits - 1) & 0xFF].value == 1) confro = 48;
+
+                    if ((ultima_distanza + dist[(num_distanze - 2) & 0xFF]) >= confro) {
+                        bits[num_bits & 0xFF].value = 1;
+                        bits[num_bits & 0xFF].pos   = (int32_t)ia - 24 - ultima_distanza;
+                        num_bits++; newbit = 1; numbit = 1;
+                        stato_decodifica = 2;
+
+                        if ((ultima_distanza + dist[(num_distanze - 2) & 0xFF]) >= 52) {
+                            bits[num_bits & 0xFF].value = 1;
+                            bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
+                            num_bits++; newbit = 1; numbit = 2;
+                            stato_decodifica = 0;
+                        }
+                    } else {
+                        bits[num_bits & 0xFF].value = 0;
+                        bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
+                        num_bits++; newbit = 0; numbit = 1;
+                        stato_decodifica = 0;
+                    }
+                } else if (stato_decodifica == 2) {
+                    stato_decodifica = 0;
+                    bits[num_bits & 0xFF].value = 0;
+                    bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
+                    num_bits++; newbit = 0; numbit = 1;
+                }
+            }
+
+            // Decodifica byte (identica)
+            while (numbit > 0) {
+                switch (stato_decobytes) {
+                    case 0:
+                        if (newbit == 0) {
+                            contatore_zeri++;
+                        } else if (contatore_zeri == 10) {
+                            stato_decobytes = 1;
+                            contatore_bytes = contatore_bits = 0;
+                            for (int j=0;j<10;j++) bytes[j]=0;
+                            sync_count += 1;
+                            last_sync_i = ia;
+                        } else {
+                            contatore_zeri = 0;
+                        }
+                        break;
+
+                    case 1:
+                        if (contatore_bits < 8) {
+                            bytes[contatore_bytes] >>= 1;
+                            if (newbit == 1) bytes[contatore_bytes] |= 0x80;
+                            contatore_bits++;
+                        } else if (newbit == 1) {
+                            contatore_bytes++;
+                            contatore_bits = 0;
+                            if (contatore_bytes >= 10) {
+                                uint16_t crc = 0x0;
+                                const uint16_t polynomial = 0x1021;
+                                for (int b=0; b<10; b++) {
+                                    uint8_t byte = bytes[b];
+                                    for (int j=0; j<8; j++) {
+                                        bool bit = ((byte >> j) & 1) == 1;
+                                        bool c15 = ((crc >> 15) & 1) == 1;
+                                        crc <<= 1;
+                                        if (c15 ^ bit) crc ^= polynomial;
+                                        crc &= 0xffff;
+                                    }
+                                }
+                                crc_ok = (crc == 0);
+                                if (crc_ok) {
+                                    country_code = (uint16_t)((bytes[5] << 2) | (bytes[4] >> 6));
+                                    device_code  = ((uint64_t)(bytes[4] & 0x3F) << 32)
+                                                 | ((uint64_t)bytes[3] << 24)
+                                                 | ((uint64_t)bytes[2] << 16)
+                                                 | ((uint64_t)bytes[1] << 8)
+                                                 |  (uint64_t)bytes[0];
+
+                                    memcpy((void*)last_sequence, bytes, 10);
+                                    last_device_code  = device_code;
+                                    last_country_code = country_code;
+                                    door_sync_count += 1;
+                                    display_sync_count += 1;
+                                }
+                                contatore_zeri = contatore_bytes = 0;
+                                stato_decobytes = 0;
+                            }
+                        } else {
+                            contatore_zeri = contatore_bits = contatore_bytes = 0;
+                            stato_decobytes = 0;
+                        }
+                        break;
+                }
+                numbit--;
+            }
         }
         
         ia++; // prossimo campione
@@ -200,6 +359,7 @@ static void media_correlazione_32() {
 // ===== Task su core 1 =====
 static void rfid_task(void *pvParameters)
 {
+    gpio_set_direction(TEST_ADC, GPIO_MODE_OUTPUT);
     // 1) Init ADC con calibrazione
     fadcInit_IDF();
     fadcStart(3);
@@ -209,6 +369,7 @@ static void rfid_task(void *pvParameters)
     tcfg.clk_src       = GPTIMER_CLK_SRC_DEFAULT;
     tcfg.direction     = GPTIMER_COUNT_UP;
     tcfg.resolution_hz = 20000000;
+    //tcfg.intr_priority = 3; // Priorità alta (0-7, con 7 più alta)
     ESP_ERROR_CHECK(gptimer_new_timer(&tcfg, &s_adc_timer));
 
     gptimer_event_callbacks_t cbs = {};
@@ -225,6 +386,25 @@ static void rfid_task(void *pvParameters)
     ESP_ERROR_CHECK(gptimer_start(s_adc_timer));
 
     // 3) Analisi
+
+// In fadcInit_IDF(), dopo aver creato il timer:
+uint64_t timer_counter_value;
+gptimer_get_raw_count(s_adc_timer, &timer_counter_value);
+
+uint64_t start_time_us = esp_timer_get_time();
+vTaskDelay(pdMS_TO_TICKS(1000));  // 1 secondo preciso
+uint64_t end_time_us = esp_timer_get_time();
+
+uint64_t timer_counter_value2;
+gptimer_get_raw_count(s_adc_timer, &timer_counter_value2);
+
+uint64_t elapsed_us = end_time_us - start_time_us;
+uint64_t timer_ticks = timer_counter_value2 - timer_counter_value;
+uint32_t actual_freq = (timer_ticks * 1000000) / elapsed_us;
+
+printf("Timer: %llu tick in %llu us = %lu Hz (atteso: 20000000)\n", 
+       timer_ticks, elapsed_us, actual_freq);
+
     media_correlazione_32();
 
     vTaskDelete(nullptr);
