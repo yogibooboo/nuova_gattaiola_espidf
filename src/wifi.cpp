@@ -20,6 +20,11 @@
 #include <esp_ota_ops.h>    // esp_ota_begin/write/end, set_boot_partition, get_next_update_partition
 #include <esp_partition.h>  // esp_partition_find_first/erase_range/write per SPIFFS
 #include "time_sync.h"
+#include "core1.h"   // <— per adc_buffer, i_interrupt, ADC_BUFFER_SIZE
+#include "esp_attr.h"   // EXT_RAM_ATTR
+
+// 10.000 campioni (20 KB) in PSRAM, allineati a 4 byte
+EXT_RAM_ATTR __attribute__((aligned(4))) static uint16_t temp_buffer[10000];
 
 static const char *TAG = "WIFI";
 static httpd_handle_t server = NULL;
@@ -752,6 +757,51 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     }
     wbuf[ws_pkt.len] = '\0';
     ESP_LOGI(TAG, "WS msg (len %u): %s", (unsigned)ws_pkt.len, (const char*)wbuf);
+
+        // --- Gestione "get_buffer": invio di 10.000 campioni in un unico frame binario ---
+    if (strcmp((const char*)wbuf, "get_buffer") == 0) {
+        // Snapshot indietro di 10k rispetto al writer
+        uint32_t current_index = i_interrupt;  // indice di scrittura "istantaneo"
+        uint32_t start_index   = (current_index + ADC_BUFFER_SIZE - 10000) % ADC_BUFFER_SIZE;
+
+        // Copia con gestione wrap (nessuna sezione critica: è diagnostica)
+        if (start_index + 10000 <= ADC_BUFFER_SIZE) {
+            memcpy(
+            temp_buffer,
+            (const void*)(const volatile void*)&adc_buffer[start_index],
+            10000 * sizeof(uint16_t)
+            );
+        } else {
+            uint32_t first_chunk  = ADC_BUFFER_SIZE - start_index;
+            uint32_t second_chunk = 10000 - first_chunk;
+            memcpy(
+                temp_buffer,
+                (const void*)(const volatile void*)&adc_buffer[start_index],
+                first_chunk * sizeof(uint16_t)
+            );
+
+            memcpy(
+                &temp_buffer[first_chunk],
+                (const void*)(const volatile void*)adc_buffer,
+                second_chunk * sizeof(uint16_t)
+            );
+        }
+
+        // Invio WS: frame binario unico (little-endian, identico ad Arduino)
+        httpd_ws_frame_t out = {
+            .final       = true,
+            .fragmented  = false,
+            .type        = HTTPD_WS_TYPE_BINARY,
+            .payload     = (uint8_t*)temp_buffer,
+            .len         = 10000 * sizeof(uint16_t)
+        };
+        esp_err_t s = httpd_ws_send_frame(req, &out);
+
+        // Rilascio buffer testo e ritorno (niente analyze_buffer_32 in IDF)
+        buf_put_ws_frame(wbuf);
+        return s;
+    }
+
 
     // Risposta di cortesia
     const char *resp = "Messaggio ricevuto dal server!";

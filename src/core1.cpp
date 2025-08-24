@@ -155,6 +155,7 @@ static void IRAM_ATTR pwm_edge_isr(void* /*arg*/) {
 
     // == era onTimer(): ==
     if (!fadcBusy()) {
+        //last_device_code=2;
         uint16_t s = fadcResult() & 0x0FFF;
         datoadc = s;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
@@ -162,6 +163,7 @@ static void IRAM_ATTR pwm_edge_isr(void* /*arg*/) {
         fadcStart(3);
     } else {
         // opzionale: pezza se conversione non pronta -> ripeti ultimo campione
+        //last_device_code+=1;
         uint16_t s = datoadc;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
