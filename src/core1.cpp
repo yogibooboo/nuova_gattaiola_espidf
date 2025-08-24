@@ -142,33 +142,33 @@ static void fadcInit_IDF()
 }
 
 // ====== GPTimer per scandire le conversioni ======
-static gptimer_handle_t s_adc_timer = nullptr;
+//static gptimer_handle_t s_adc_timer = nullptr;
 
-// ISR produttore (identica alla tua)
-void IRAM_ATTR onTimer(void) {
-    gpio_set_level(TEST_ADC, 1); // Debug: toggle alto
+// ISR GPIO sul pin portante: usa 1 fronte su 2 -> ~67 kHz
+static void IRAM_ATTR pwm_edge_isr(void* /*arg*/) {
+    static uint32_t edge = 0;
+    edge += 1;
+    if (edge & 1) {
+        // dispari: salta (divide by 2)
+        return;
+    }
+
+    // == era onTimer(): ==
     if (!fadcBusy()) {
-        uint16_t s = fadcResult();
+        uint16_t s = fadcResult() & 0x0FFF;
         datoadc = s;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-        fadcStart(3); // CH3 (GPIO4)
-        gpio_set_level(TEST_ADC, 0); // Debug: 
-        
+        fadcStart(3);
     } else {
-        
-        uint16_t s=adc_buffer[(i_interrupt-2) & 0x3FFF];  //in caso di errore mette una "pezza"
+        // opzionale: pezza se conversione non pronta -> ripeti ultimo campione
+        uint16_t s = datoadc;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-    
     }
-    
 }
 
-static bool IRAM_ATTR adc_timer_cb(gptimer_handle_t, const gptimer_alarm_event_data_t*, void*) {
-    onTimer();
-    return true;
-}
+
 
 // ====== Analisi (identica alla tua) ======
 static void media_correlazione_32() {
@@ -357,58 +357,43 @@ static void media_correlazione_32() {
 }
 
 // ===== Task su core 1 =====
+// === Task sul core 1: init ADC, aggancio IRQ su portante, poi analisi ===
+// === Task sul core 1: init ADC, aggancio IRQ su portante, toggle su GPIO21, poi analisi ===
 static void rfid_task(void *pvParameters)
 {
-    gpio_set_direction(TEST_ADC, GPIO_MODE_OUTPUT);
-    // 1) Init ADC con calibrazione
+    // 1) ADC “stile Arduino” + prima conversione
     fadcInit_IDF();
     fadcStart(3);
 
-    // 2) GPTimer setup (identico al tuo)
-    gptimer_config_t tcfg = {};
-    tcfg.clk_src       = GPTIMER_CLK_SRC_DEFAULT;
-    tcfg.direction     = GPTIMER_COUNT_UP;
-    tcfg.resolution_hz = 20000000;
-    //tcfg.intr_priority = 3; // Priorità alta (0-7, con 7 più alta)
-    ESP_ERROR_CHECK(gptimer_new_timer(&tcfg, &s_adc_timer));
+    // 2) GPIO21 come pin di misura (oscilloscopio)
+    gpio_reset_pin(GPIO_NUM_21);
+    gpio_set_direction(GPIO_NUM_21, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_21, 0);
 
-    gptimer_event_callbacks_t cbs = {};
-    cbs.on_alarm = adc_timer_cb;
-    ESP_ERROR_CHECK(gptimer_register_event_callbacks(s_adc_timer, &cbs, nullptr));
+    // 3) PWM_PIN (GPIO14) come input + IRQ
+    //gpio_set_direction(PWM_PIN, GPIO_MODE_INPUT_OUTPUT);
+    gpio_set_pull_mode(PWM_PIN, GPIO_FLOATING);
+    gpio_set_intr_type(PWM_PIN, GPIO_INTR_POSEDGE);
 
-    gptimer_alarm_config_t alarm = {};
-    alarm.reload_count = 0;
-    alarm.alarm_count  = 298;
-    alarm.flags.auto_reload_on_alarm = true;
-    ESP_ERROR_CHECK(gptimer_set_alarm_action(s_adc_timer, &alarm));
+    // 4) Installa servizio ISR (solo una volta)
+    static bool isr_installed = false;
+    if (!isr_installed) {
+        ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
+        isr_installed = true;
+    }
 
-    ESP_ERROR_CHECK(gptimer_enable(s_adc_timer));
-    ESP_ERROR_CHECK(gptimer_start(s_adc_timer));
+    // 5) Collega ISR al pin della portante e abilita interrupt
+    ESP_ERROR_CHECK(gpio_isr_handler_add(PWM_PIN, pwm_edge_isr, nullptr));
+    ESP_ERROR_CHECK(gpio_intr_enable(PWM_PIN));   // <- questa mancava
 
-    // 3) Analisi
-
-// In fadcInit_IDF(), dopo aver creato il timer:
-uint64_t timer_counter_value;
-gptimer_get_raw_count(s_adc_timer, &timer_counter_value);
-
-uint64_t start_time_us = esp_timer_get_time();
-vTaskDelay(pdMS_TO_TICKS(1000));  // 1 secondo preciso
-uint64_t end_time_us = esp_timer_get_time();
-
-uint64_t timer_counter_value2;
-gptimer_get_raw_count(s_adc_timer, &timer_counter_value2);
-
-uint64_t elapsed_us = end_time_us - start_time_us;
-uint64_t timer_ticks = timer_counter_value2 - timer_counter_value;
-uint32_t actual_freq = (timer_ticks * 1000000) / elapsed_us;
-
-printf("Timer: %llu tick in %llu us = %lu Hz (atteso: 20000000)\n", 
-       timer_ticks, elapsed_us, actual_freq);
-
+    // 6) Analisi sul core 1
     media_correlazione_32();
 
     vTaskDelete(nullptr);
 }
+
+
+
 
 void start_rfid_task(void) {
     xTaskCreatePinnedToCore(rfid_task, "RFID_Task", 8192, nullptr, 5, nullptr, 1);
