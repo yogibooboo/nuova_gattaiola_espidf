@@ -17,11 +17,22 @@
 #define MAX_CATS 10
 #define LOG_BUFFER_SIZE 100
 
-#define WIFI_LED    GPIO_NUM_6 
-#define PWM_PIN     GPIO_NUM_14 
-#define FDX_B_PIN   GPIO_NUM_16
-#define ADC_PIN     GPIO_NUM_4
-#define TEST_ADC    GPIO_NUM_21
+#define WIFI_LED    GPIO_NUM_6      // LED giallo stato WiFi
+#define PWM_PIN     GPIO_NUM_14     // RFID Reader
+#define FDX_B_PIN   GPIO_NUM_16     //Segnale di test FDX_B
+#define ADC_PIN     GPIO_NUM_4      //Ingresso ADC
+#define TEST_ADC    GPIO_NUM_21     //uscita test interrupt ADC
+
+#define DETECTED         GPIO_NUM_15      // LED verde rilevato chip
+#define LED_ROSSO        GPIO_NUM_7   // LED rosso (porta aperta)
+#define LED_BLUE         GPIO_NUM_5       // IR detected
+#define PULSANTE_BLU     GPIO_NUM_39   // Pulsante blu per apertura manuale
+#define INFRARED         GPIO_NUM_3   // Sensore infrarosso della gattaiola
+#define INFRARED_ENABLE  GPIO_NUM_8      // Abilitazione sensore infrarosso
+#define SERVO_PIN        GPIO_NUM_12    //Uscita pwm servomotore
+
+#define ENCODER_SDA      GPIO_NUM_10
+#define ENCODER_SCL      GPIO_NUM_9
 
 #define LED_ON 0
 #define LED_OFF 1

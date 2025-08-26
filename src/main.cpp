@@ -25,6 +25,8 @@ extern "C" esp_err_t spiffs_get_info(size_t* total, size_t* used);
 #include "driver/rmt_types.h"
 #include "esp_check.h"
 
+extern "C" void door_task(void *pv);
+
 static const char* TAG = "MAIN_APP";
 static const char* TAG_RMT = "RMT134";
 
@@ -280,4 +282,9 @@ extern "C" void app_main()
 
     // Task di stampa sul CORE 0
     xTaskCreatePinnedToCore(print_task, "Print_Task", 4096, nullptr, 1, nullptr, 0);
+
+    // Task porta su CORE 0 (RFID rimane su core 1 dentro start_rfid_task)
+
+    xTaskCreatePinnedToCore(door_task, "Door_Task", 4096, nullptr, 5, nullptr, 0);
+
 }

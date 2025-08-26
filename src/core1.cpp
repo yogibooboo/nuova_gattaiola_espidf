@@ -154,20 +154,31 @@ static void IRAM_ATTR pwm_edge_isr(void* /*arg*/) {
     }
 
     // == era onTimer(): ==
-    if (!fadcBusy()) {
+    
+    //if (!fadcBusy()) {
         //last_device_code=2;
-        uint16_t s = fadcResult() & 0x0FFF;
-        datoadc = s;
+
+
+        uint16_t s = HAL_FORCE_READ_U32_REG_FIELD(SENS.sar_meas1_ctrl2, meas1_data_sar) & 0x0FFF;
+        //datoadc = s;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-        fadcStart(3);
-    } else {
+
+
+        //SENS.sar_meas1_ctrl2.sar1_en_pad = (1U << 3);
+        SENS.sar_meas1_ctrl2.meas1_start_sar = 0;
+        SENS.sar_meas1_ctrl2.meas1_start_sar = 1;
+        //fadcStart(3);
+
+
+    /*} else {
         // opzionale: pezza se conversione non pronta -> ripeti ultimo campione
         //last_device_code+=1;
         uint16_t s = datoadc;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
         adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-    }
+    }*/
+    
 }
 
 
@@ -196,24 +207,28 @@ static void media_correlazione_32() {
             vTaskDelay(pdMS_TO_TICKS(72));
             continue;
         }
-
+         
         const int larghezza_finestra=8;
         const int lunghezza_correlazione=32;
         const int soglia_mezzo_bit=25;
 
         if (ia >= (uint32_t)lunghezza_correlazione) {
-            // Filtro mobile
-            filt[ ia        & (CORR_BUFFER_SIZE - 1)] =
-                filt[(ia-1)  & (CORR_BUFFER_SIZE - 1)]
-              - (int32_t)adc_buffer[(ia-4) & 0x3FFF] / larghezza_finestra
-              + (int32_t)adc_buffer[(ia+3) & 0x3FFF] / larghezza_finestra;
+            gpio_set_level(GPIO_NUM_21, 1);
+            int32_t sum = 0;
+            for(int j = 0; j < 8; j++) {
+                sum += adc_buffer[(ia-4+j) & 0x3FFF];
+            }
+            filt[ia & 255] = sum;
 
-            // “Correlazione” (2^ derivata)
-            corr[(ia-16) & (CORR_BUFFER_SIZE - 1)] =
-                corr[(ia-17) & (CORR_BUFFER_SIZE - 1)]
-              - filt[(ia-32) & (CORR_BUFFER_SIZE - 1)]
-              + 2 * filt[(ia-16) & (CORR_BUFFER_SIZE - 1)]
-              -     filt[ ia     & (CORR_BUFFER_SIZE - 1)];
+            // “Correlazione” 
+            int32_t sum_corr = 0;
+            for(int j = 0; j < 16; j++) {
+                sum_corr += filt[(ia-31+j) & 0xFF];  // Primi 16: somma
+                sum_corr -= filt[(ia-15+j) & 0xFF];  // Ultimi 16: sottrai  
+            }
+            corr[(ia-16) & 0xFF] = sum_corr;
+
+            gpio_set_level(GPIO_NUM_21, 0);
 
             newbit = 2; numbit = 0; newpeak = false;
 
@@ -371,6 +386,12 @@ static void rfid_task(void *pvParameters)
     gpio_reset_pin(GPIO_NUM_21);
     gpio_set_direction(GPIO_NUM_21, GPIO_MODE_OUTPUT);
     gpio_set_level(GPIO_NUM_21, 0);
+
+     // 2) GPIO11 come secondo pin di misura (oscilloscopio)
+    gpio_reset_pin(GPIO_NUM_11);
+    gpio_set_direction(GPIO_NUM_11, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_11, 0);
+
 
     // 3) PWM_PIN (GPIO14) come input + IRQ
     //gpio_set_direction(PWM_PIN, GPIO_MODE_INPUT_OUTPUT);

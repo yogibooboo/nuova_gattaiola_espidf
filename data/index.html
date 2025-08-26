@@ -1,41 +1,153 @@
 <!DOCTYPE html>
-<html>
+<html lang="it">
 <head>
-    <title>Pet Door</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gattaiola Intelligente</title>
+    <link rel="icon" type="image/png" href="favicon.png">   
+	<link rel="manifest" href="manifest.json">  
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+            color: #333;
+        }
+        h1 {
+            text-align: center;
+            color: #2c3e50;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .controls {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        select {
+            padding: 10px;
+            font-size: 16px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+            background-color: #fff;
+            cursor: pointer;
+        }
+        .log-table {
+            width: 100%;
+            border-collapse: collapse;
+            background-color: #fff;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            max-height: 500px;
+            overflow-y: auto;
+            display: block;
+        }
+        .log-table th, .log-table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #ddd;
+        }
+        .log-table th {
+            background-color: #2c3e50;
+            color: #fff;
+            position: sticky;
+            top: 0;
+        }
+        .log-table tr:hover {
+            background-color: #f9f9f9;
+        }
+        @media (max-width: 600px) {
+            .log-table {
+                font-size: 14px;
+            }
+            .log-table th, .log-table td {
+                padding: 8px;
+            }
+            select {
+                width: 100%;
+                font-size: 14px;
+            }
+        }
+    </style>
 </head>
 <body>
-    <h1>Benvenuuuto nella Gattaiola Scheggiaribes!</h1>
-    <p>Stato Wi-Fi: <span id="wifi-status">Non connesso</span></p>
-    <p>RSSI: <span id="rssi">N/A</span> dBm</p>
-    <button onclick="connectWebSocket()">Connetti WebSocket</button>
-    <p>Messaggi WebSocket: <div id="messages"></div></p>
+    <div class="container">
+        <h1>Gattaiola ScheggiaRibes</h1>
+        <div class="controls">
+            <label for="doorMode">Modalità Porta: </label>
+            <select id="doorMode" onchange="setDoorMode()">
+                <option value="AUTO">Automatica</option>
+                <option value="ALWAYS_OPEN">Sempre Aperta</option>
+                <option value="ALWAYS_CLOSED">Sempre Chiusa</option>
+            </select>
+        </div>
+        <h2>Log dei Passaggi</h2>
+        <table class="log-table">
+            <thead>
+                <tr>
+                    <th>Data/Ora</th>
+                    <th>Tipo</th>
+                    <th>Nome</th>
+                    <th>Codice Paese</th>
+                    <th>Codice Dispositivo</th>
+                    <th>Autorizzato</th>
+                </tr>
+            </thead>
+            <tbody id="logBody"></tbody>
+        </table>
+    </div>
     <script>
-        function connectWebSocket() {
-            const ws = new WebSocket('ws://' + window.location.host + '/ws');
-            const statusElement = document.getElementById('wifi-status');
-            const rssiElement = document.getElementById('rssi');
-            const messagesElement = document.getElementById('messages');
+        let ws = new WebSocket("ws://" + window.location.hostname + "/ws");
 
-            ws.onopen = function() {
-                statusElement.textContent = 'Connesso';
-                console.log('WebSocket connesso');
-                ws.send('Test dal browser');
-            };
+        function updateLog(data) {
+    let logBody = document.getElementById("logBody");
+    logBody.innerHTML = "";
+    data.log.forEach(entry => {
+        let row = document.createElement("tr");
+        row.innerHTML = `
+            <td>${entry.timestamp}</td>
+            <td>${entry.type}</td>
+            <td>${entry.name}</td>
+            <td>${entry.country_code}</td>
+            <td>${entry.device_code}</td>
+            <td>${entry.authorized ? "Sì" : "No"}</td>
+        `;
+        logBody.appendChild(row);
+    });
+}
+        ws.onopen = function() {
+            console.log("WebSocket connesso");
+            // Non inviamo get_log qui, perché il server invia il log all'apertura
+        };
 
-            ws.onmessage = function(event) {
-                messagesElement.innerHTML += `<p>Messaggio ricevuto: ${event.data}</p>`;
-                console.log('Messaggio ricevuto:', event.data);
-            };
+        ws.onmessage = function(event) {
+            if (typeof event.data === "string") {
+                if (event.data.startsWith("door_mode:")) {
+                    let mode = event.data.substring(10);
+                    document.getElementById("doorMode").value = mode;
+                    console.log("Modalità aggiornata: " + mode);
+                } else if (event.data.startsWith("Mode updated:") || event.data === "Mode unchanged") {
+                    // Popup rimosso
+                } else {
+                    let data = JSON.parse(event.data);
+                    if (data.log) {
+                        updateLog(data);
+                    }
+                }
+            }
+        };
 
-            ws.onclose = function() {
-                statusElement.textContent = 'Disconnesso';
-                console.log('WebSocket disconnesso');
-            };
+        ws.onclose = function() {
+            console.log("WebSocket disconnesso, riconnessione...");
+            setTimeout(() => {
+                ws = new WebSocket("ws://" + window.location.hostname + "/ws");
+            }, 5000);
+        };
 
-            ws.onerror = function(error) {
-                statusElement.textContent = 'Errore';
-                console.log('Errore WebSocket:', error);
-            };
+        function setDoorMode() {
+            let mode = document.getElementById("doorMode").value;
+            ws.send("set_door_mode:" + mode);
         }
     </script>
 </body>
