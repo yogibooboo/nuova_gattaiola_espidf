@@ -18,10 +18,11 @@
 #define LOG_BUFFER_SIZE 100
 
 #define WIFI_LED    GPIO_NUM_6      // LED giallo stato WiFi
-#define PWM_PIN     GPIO_NUM_14     // RFID Reader
+#define F134KHZ      GPIO_NUM_14     // RFID Reader
 #define FDX_B_PIN   GPIO_NUM_16     //Segnale di test FDX_B
 #define ADC_PIN     GPIO_NUM_4      //Ingresso ADC
-#define TEST_ADC    GPIO_NUM_21     //uscita test interrupt ADC
+#define SCOPE_1     GPIO_NUM_21     //uscita test 1
+#define SCOPE_2     GPIO_NUM_11     //uscita test 1
 
 #define DETECTED         GPIO_NUM_15      // LED verde rilevato chip
 #define LED_ROSSO        GPIO_NUM_7   // LED rosso (porta aperta)
@@ -129,4 +130,4 @@ esp_err_t spiffs_get_info(size_t* total, size_t* used);
 #ifdef __cplusplus
 } // extern "C"
 #endif
-#endif // COMUNE_H
+#endif // COMUNE

@@ -48,7 +48,7 @@ static const uint8_t fdx_b_sequence[128] = {
 };
 
 // Avvia la portante in loop infinito (duty 50%)
-static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)PWM_PIN)
+static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)F134KHZ)
 {
     if (s_rmt_chan) {
         ESP_LOGI(TAG_RMT, "Carrier già avviata");

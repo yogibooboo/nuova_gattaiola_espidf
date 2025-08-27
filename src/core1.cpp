@@ -141,46 +141,23 @@ static void fadcInit_IDF()
     printf("ADC configurato (no calibrazione)\n");
 }
 
-// ====== GPTimer per scandire le conversioni ======
-//static gptimer_handle_t s_adc_timer = nullptr;
+#include "driver/pulse_cnt.h"
 
-// ISR GPIO sul pin portante: usa 1 fronte su 2 -> ~67 kHz
-static void IRAM_ATTR pwm_edge_isr(void* /*arg*/) {
-    static uint32_t edge = 0;
-    edge += 1;
-    if (edge & 1) {
-        // dispari: salta (divide by 2)
-        return;
-    }
+static pcnt_unit_handle_t pcnt_unit = NULL;
+static pcnt_channel_handle_t pcnt_chan = NULL;
 
-    // == era onTimer(): ==
+static bool IRAM_ATTR pcnt_watch_callback(pcnt_unit_handle_t unit, const pcnt_watch_event_data_t *edata, void *user_ctx) {
+    //pcnt_unit_clear_count(unit);
     
-    //if (!fadcBusy()) {
-        //last_device_code=2;
-
-
-        uint16_t s = HAL_FORCE_READ_U32_REG_FIELD(SENS.sar_meas1_ctrl2, meas1_data_sar) & 0x0FFF;
-        //datoadc = s;
-        adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-        adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-
-
-        //SENS.sar_meas1_ctrl2.sar1_en_pad = (1U << 3);
-        SENS.sar_meas1_ctrl2.meas1_start_sar = 0;
-        SENS.sar_meas1_ctrl2.meas1_start_sar = 1;
-        //fadcStart(3);
-
-
-    /*} else {
-        // opzionale: pezza se conversione non pronta -> ripeti ultimo campione
-        //last_device_code+=1;
-        uint16_t s = datoadc;
-        adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-        adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
-    }*/
+    uint16_t s = SENS.sar_meas1_ctrl2.meas1_data_sar & 0x0FFF;   //lettura misura
+    adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
+    adc_buffer[i_interrupt & 0x3FFF] = s; i_interrupt += 1;
     
+    SENS.sar_meas1_ctrl2.meas1_start_sar = 0;   
+    SENS.sar_meas1_ctrl2.meas1_start_sar = 1;   //restart misura
+    
+    return false;
 }
-
 
 
 // ====== Analisi (identica alla tua) ======
@@ -213,7 +190,7 @@ static void media_correlazione_32() {
         const int soglia_mezzo_bit=25;
 
         if (ia >= (uint32_t)lunghezza_correlazione) {
-            gpio_set_level(GPIO_NUM_21, 1);
+            gpio_set_level(SCOPE_1, 1);
             int32_t sum = 0;
             for(int j = 0; j < 8; j++) {
                 sum += adc_buffer[(ia-4+j) & 0x3FFF];
@@ -228,7 +205,7 @@ static void media_correlazione_32() {
             }
             corr[(ia-16) & 0xFF] = sum_corr;
 
-            gpio_set_level(GPIO_NUM_21, 0);
+            gpio_set_level(SCOPE_1, 0);
 
             newbit = 2; numbit = 0; newpeak = false;
 
@@ -375,47 +352,62 @@ static void media_correlazione_32() {
 
 // ===== Task su core 1 =====
 // === Task sul core 1: init ADC, aggancio IRQ su portante, poi analisi ===
-// === Task sul core 1: init ADC, aggancio IRQ su portante, toggle su GPIO21, poi analisi ===
 static void rfid_task(void *pvParameters)
 {
-    // 1) ADC “stile Arduino” + prima conversione
+    // 1) ADC "stile Arduino" + prima conversione
     fadcInit_IDF();
     fadcStart(3);
 
     // 2) GPIO21 come pin di misura (oscilloscopio)
-    gpio_reset_pin(GPIO_NUM_21);
-    gpio_set_direction(GPIO_NUM_21, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_21, 0);
+    gpio_reset_pin(SCOPE_1);
+    gpio_set_direction(SCOPE_1, GPIO_MODE_OUTPUT);
+    gpio_set_level(SCOPE_1, 0);
 
-     // 2) GPIO11 come secondo pin di misura (oscilloscopio)
-    gpio_reset_pin(GPIO_NUM_11);
-    gpio_set_direction(GPIO_NUM_11, GPIO_MODE_OUTPUT);
-    gpio_set_level(GPIO_NUM_11, 0);
+    // 2) GPIO11 come secondo pin di misura (oscilloscopio)
+    gpio_reset_pin(SCOPE_2);
+    gpio_set_direction(SCOPE_2, GPIO_MODE_OUTPUT);
+    gpio_set_level(SCOPE_2, 0);
 
+    // 3) Setup PCNT per divisore hardware /2
+    pcnt_unit_config_t unit_config = {
+        .low_limit = -2,
+        .high_limit = 2,
+        .intr_priority = 0,
+        .flags = {},
+    };
+ 
+    ESP_ERROR_CHECK(pcnt_new_unit(&unit_config, &pcnt_unit));
 
-    // 3) PWM_PIN (GPIO14) come input + IRQ
-    //gpio_set_direction(PWM_PIN, GPIO_MODE_INPUT_OUTPUT);
-    gpio_set_pull_mode(PWM_PIN, GPIO_FLOATING);
-    gpio_set_intr_type(PWM_PIN, GPIO_INTR_POSEDGE);
+    pcnt_chan_config_t chan_config = {
+        .edge_gpio_num = F134KHZ,
+        .level_gpio_num = -1,
+        .flags = {},
+    };
+        ESP_ERROR_CHECK(pcnt_new_channel(pcnt_unit, &chan_config, &pcnt_chan));
 
-    // 4) Installa servizio ISR (solo una volta)
-    static bool isr_installed = false;
-    if (!isr_installed) {
-        ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_IRAM));
-        isr_installed = true;
-    }
+    // 4) Configura per contare sui fronti di salita
+    ESP_ERROR_CHECK(pcnt_channel_set_edge_action(pcnt_chan, 
+        PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_HOLD));
 
-    // 5) Collega ISR al pin della portante e abilita interrupt
-    ESP_ERROR_CHECK(gpio_isr_handler_add(PWM_PIN, pwm_edge_isr, nullptr));
-    ESP_ERROR_CHECK(gpio_intr_enable(PWM_PIN));   // <- questa mancava
+    // 5) Registra callback per watch point
+    pcnt_event_callbacks_t cbs = {
+        .on_reach = pcnt_watch_callback,
+    };
+    ESP_ERROR_CHECK(pcnt_unit_register_event_callbacks(pcnt_unit, &cbs, NULL));
 
-    // 6) Analisi sul core 1
+    // 6) Abilita e avvia PCNT con watch point a 2
+    ESP_ERROR_CHECK(pcnt_unit_enable(pcnt_unit));
+    ESP_ERROR_CHECK(pcnt_unit_add_watch_point(pcnt_unit, 2));
+    ESP_ERROR_CHECK(pcnt_unit_start(pcnt_unit));
+
+    // 7) Analisi sul core 1
     media_correlazione_32();
 
+    // Cleanup (mai raggiunto)
+    pcnt_unit_stop(pcnt_unit);
+    pcnt_del_unit(pcnt_unit);
     vTaskDelete(nullptr);
 }
-
-
 
 
 void start_rfid_task(void) {
