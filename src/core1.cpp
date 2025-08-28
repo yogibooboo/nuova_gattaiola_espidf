@@ -185,9 +185,11 @@ static void media_correlazione_32() {
             continue;
         }
          
-        const int larghezza_finestra=8;
+        //const int larghezza_finestra=8;
         const int lunghezza_correlazione=32;
         const int soglia_mezzo_bit=25;
+
+        datoadc=adc_buffer[(ia) & 0x3FFF]; // per log
 
         if (ia >= (uint32_t)lunghezza_correlazione) {
             gpio_set_level(SCOPE_1, 1);

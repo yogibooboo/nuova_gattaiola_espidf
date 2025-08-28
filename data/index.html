@@ -57,6 +57,12 @@
         .log-table tr:hover {
             background-color: #f9f9f9;
         }
+        .status-info {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 14px;
+            color: #666;
+        }
         @media (max-width: 600px) {
             .log-table {
                 font-size: 14px;
@@ -74,6 +80,9 @@
 <body>
     <div class="container">
         <h1>Gattaiola ScheggiaRibes</h1>
+        <div class="status-info">
+            Ultimo aggiornamento: <span id="lastUpdate">-</span>
+        </div>
         <div class="controls">
             <label for="doorMode">Modalità Porta: </label>
             <select id="doorMode" onchange="setDoorMode()">
@@ -98,57 +107,101 @@
         </table>
     </div>
     <script>
-        let ws = new WebSocket("ws://" + window.location.hostname + "/ws");
+        let ws = null;
+        let isUpdatingMode = false; // Flag per evitare loop
 
         function updateLog(data) {
-    let logBody = document.getElementById("logBody");
-    logBody.innerHTML = "";
-    data.log.forEach(entry => {
-        let row = document.createElement("tr");
-        row.innerHTML = `
-            <td>${entry.timestamp}</td>
-            <td>${entry.type}</td>
-            <td>${entry.name}</td>
-            <td>${entry.country_code}</td>
-            <td>${entry.device_code}</td>
-            <td>${entry.authorized ? "Sì" : "No"}</td>
-        `;
-        logBody.appendChild(row);
-    });
-}
-        ws.onopen = function() {
-            console.log("WebSocket connesso");
-            // Non inviamo get_log qui, perché il server invia il log all'apertura
-        };
+            let logBody = document.getElementById("logBody");
+            logBody.innerHTML = "";
+            data.log.forEach(entry => {
+                let row = document.createElement("tr");
+                row.innerHTML = `
+                    <td>${entry.timestamp}</td>
+                    <td>${entry.type}</td>
+                    <td>${entry.name}</td>
+                    <td>${entry.country_code}</td>
+                    <td>${entry.device_code}</td>
+                    <td>${entry.authorized ? "Sì" : "No"}</td>
+                `;
+                logBody.appendChild(row);
+            });
+        }
 
-        ws.onmessage = function(event) {
-            if (typeof event.data === "string") {
-                if (event.data.startsWith("door_mode:")) {
-                    let mode = event.data.substring(10);
-                    document.getElementById("doorMode").value = mode;
-                    console.log("Modalità aggiornata: " + mode);
-                } else if (event.data.startsWith("Mode updated:") || event.data === "Mode unchanged") {
-                    // Popup rimosso
-                } else {
-                    let data = JSON.parse(event.data);
-                    if (data.log) {
-                        updateLog(data);
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    // Aggiorna modalità porta solo se non stiamo modificando
+                    if (!isUpdatingMode) {
+                        document.getElementById("doorMode").value = data.door_mode;
+                    }
+                    
+                    // Aggiorna log
+                    updateLog(data);
+                    
+                    // Aggiorna timestamp
+                    document.getElementById("lastUpdate").textContent = new Date().toLocaleTimeString();
+                })
+                .catch(err => {
+                    console.log('Errore polling:', err);
+                    document.getElementById("lastUpdate").textContent = 'Errore connessione';
+                });
+        }
+
+        function initWebSocket() {
+            ws = new WebSocket("ws://" + window.location.hostname + "/ws");
+
+            ws.onopen = function() {
+                console.log("WebSocket connesso (per comandi)");
+            };
+
+            ws.onmessage = function(event) {
+                if (typeof event.data === "string") {
+                    if (event.data.startsWith("Mode updated")) {
+                        console.log("Modalità aggiornata via WebSocket");
+                        // Forza aggiornamento immediato dello stato
+                        setTimeout(updateStatus, 500);
                     }
                 }
-            }
-        };
+            };
 
-        ws.onclose = function() {
-            console.log("WebSocket disconnesso, riconnessione...");
-            setTimeout(() => {
-                ws = new WebSocket("ws://" + window.location.hostname + "/ws");
-            }, 5000);
-        };
+            ws.onclose = function() {
+                console.log("WebSocket disconnesso, riconnessione...");
+                setTimeout(initWebSocket, 5000);
+            };
+
+            ws.onerror = function(error) {
+                console.log("Errore WebSocket:", error);
+            };
+        }
 
         function setDoorMode() {
             let mode = document.getElementById("doorMode").value;
-            ws.send("set_door_mode:" + mode);
+            isUpdatingMode = true; // Evita aggiornamenti durante il comando
+            
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send("set_door_mode:" + mode);
+                // Reset flag dopo breve delay
+                setTimeout(() => {
+                    isUpdatingMode = false;
+                }, 2000);
+            } else {
+                console.log("WebSocket non connesso, riprovo...");
+                isUpdatingMode = false;
+            }
         }
+
+        // Inizializzazione
+        window.onload = function() {
+            // Caricamento iniziale immediato
+            updateStatus();
+            
+            // Avvia WebSocket per comandi
+            initWebSocket();
+            
+            // Polling ogni 5 secondi
+            setInterval(updateStatus, 5000);
+        };
     </script>
 </body>
 </html>
