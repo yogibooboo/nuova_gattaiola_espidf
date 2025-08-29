@@ -45,8 +45,8 @@ extern volatile uint8_t  last_sequence[10];
 extern volatile uint64_t last_device_code;
 extern volatile uint16_t last_country_code;
 extern volatile uint32_t last_sync_i;
-extern volatile bool     door_open;
-extern volatile TickType_t door_timer_start;
+//extern volatile bool     door_open;
+//extern volatile TickType_t door_timer_start;
 extern volatile uint32_t display_sync_count;
 extern volatile uint16_t datoadc;   // lastADC
 

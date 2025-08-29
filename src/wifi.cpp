@@ -215,8 +215,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
             config.door_mode = new_mode;
             save_config();
             
-            // Log dell'evento
-            add_door_mode_log(new_mode);
+
             
             ESP_LOGI(TAG, "Modalità porta cambiata da %d a %d", old_mode, new_mode);
             

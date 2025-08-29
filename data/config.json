@@ -31,6 +31,13 @@
             "authorized": false
         },
 
+                {
+            "device_code": 260171063604,
+            "country_code": 380,
+            "name": "Jonny",
+            "authorized": false
+        },
+        
         {
             "device_code": 260101573791,
             "country_code": 380,

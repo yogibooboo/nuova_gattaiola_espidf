@@ -26,7 +26,7 @@
 
 #define DETECTED         GPIO_NUM_15      // LED verde rilevato chip
 #define LED_ROSSO        GPIO_NUM_7   // LED rosso (porta aperta)
-#define LED_BLUE         GPIO_NUM_5       // IR detected
+#define LED_BLU          GPIO_NUM_5       // IR detected
 #define PULSANTE_BLU     GPIO_NUM_39   // Pulsante blu per apertura manuale
 #define INFRARED         GPIO_NUM_3   // Sensore infrarosso della gattaiola
 #define INFRARED_ENABLE  GPIO_NUM_8      // Abilitazione sensore infrarosso
@@ -96,6 +96,16 @@ typedef struct {
     Cat authorized_cats[MAX_CATS];
     uint8_t num_cats;
 } config_t;
+
+#define ENCODER_BUFFER_SIZE (1 << 14) // 2^14 = 16384
+
+struct EncoderData {
+    uint8_t infrared : 1;   // Bit 0
+    uint8_t detect : 1;     // Bit 1
+    uint8_t door_open : 1;  // Bit 2
+    uint8_t newcode : 1;    // Bit 3
+    uint16_t rawAngle : 12; // Bit 4-15
+};
 
 // Variabili globali
 extern config_t config;

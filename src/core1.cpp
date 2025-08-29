@@ -43,8 +43,8 @@ volatile uint8_t  last_sequence[10];
 volatile uint64_t last_device_code = 0;
 volatile uint16_t last_country_code = 0;
 volatile uint32_t last_sync_i = 0;
-volatile bool     door_open = false;
-volatile TickType_t door_timer_start = 0;
+//volatile bool     door_open = false;
+//volatile TickType_t door_timer_start = 0;
 volatile uint32_t display_sync_count = 0;
 volatile uint16_t datoadc = 0;
 
