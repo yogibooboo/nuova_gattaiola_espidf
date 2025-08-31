@@ -97,7 +97,7 @@ typedef struct {
     uint8_t num_cats;
 } config_t;
 
-#define ENCODER_BUFFER_SIZE (1 << 14) // 2^14 = 16384
+
 
 struct EncoderData {
     uint8_t infrared : 1;   // Bit 0
@@ -107,12 +107,21 @@ struct EncoderData {
     uint16_t rawAngle : 12; // Bit 4-15
 };
 
+#define ENCODER_BUFFER_SIZE (1 << 14) // 2^14 = 16384
+extern EXT_RAM_BSS_ATTR EncoderData encoder_buffer[ENCODER_BUFFER_SIZE];
+extern volatile size_t encoder_buffer_index;
+
 // Variabili globali
 extern config_t config;
 extern LogEntry log_buffer[LOG_BUFFER_SIZE];
 extern volatile bool wifi_connected; // Uniformato con volatile
 extern int8_t wifi_rssi;
 extern uint32_t log_count;
+
+extern volatile uint16_t lastRawAngle;
+extern volatile uint16_t lastMagnitude;
+extern volatile uint16_t lastCorrectedAngle;
+
 
 // Funzioni
 esp_err_t init_spiffs(void);

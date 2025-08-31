@@ -21,6 +21,9 @@ void stop_webserver(void);
 
 static const char *TAG = "WIFI";
 
+// Buffer temporaneo statico per copia encoder (32KB)
+static EXT_RAM_BSS_ATTR EncoderData temp_encoder_buffer[ENCODER_BUFFER_SIZE] __attribute__((aligned(4)));
+
 // Gestione client WebSocket per broadcast
 #define MAX_WS_CLIENTS 4
 static int g_ws_client_fds[MAX_WS_CLIENTS];
@@ -55,9 +58,9 @@ void broadcast_door_mode_change(DoorMode mode) {
     snprintf(message, sizeof(message), "door_mode:%s", mode_names[mode]);
     
     // Nota: in ESP-IDF non abbiamo accesso diretto ai fd dei client WebSocket
-    // Questa implementazione è un placeholder - la logica di broadcast reale
-    // richiederebbe modifiche più profonde al sistema HTTP server
-    ESP_LOGI(TAG, "Broadcast modalità porta: %s (placeholder)", message);
+    // Questa implementazione Ã¨ un placeholder - la logica di broadcast reale
+    // richiederebbe modifiche piÃ¹ profonde al sistema HTTP server
+    ESP_LOGI(TAG, "Broadcast modalitÃ  porta: %s (placeholder)", message);
 }
 
 void add_door_mode_log(DoorMode mode) {
@@ -70,13 +73,13 @@ void add_door_mode_log(DoorMode mode) {
     entry->country_code = 0;
     entry->authorized = (mode == ALWAYS_OPEN);
     
-    const char* mode_events[] = {"Modalità Automatica", "Modalità Sempre Aperto", "Modalità Sempre Chiuso"};
+    const char* mode_events[] = {"ModalitÃ  Automatica", "ModalitÃ  Sempre Aperto", "ModalitÃ  Sempre Chiuso"};
     strncpy(entry->event, mode_events[mode], sizeof(entry->event) - 1);
     entry->event[sizeof(entry->event) - 1] = '\0';
     
     log_count++;
     
-    ESP_LOGI(TAG, "Aggiunta entry log cambio modalità: %s", mode_events[mode]);
+    ESP_LOGI(TAG, "Aggiunta entry log cambio modalitÃ : %s", mode_events[mode]);
 }
 
 // =====================================
@@ -146,7 +149,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
         uint32_t current_index = i_interrupt;  // indice di scrittura "istantaneo"
         uint32_t start_index   = (current_index + ADC_BUFFER_SIZE - 10000) % ADC_BUFFER_SIZE;
 
-        // Copia con gestione wrap (nessuna sezione critica: è diagnostica)
+        // Copia con gestione wrap (nessuna sezione critica: Ã¨ diagnostica)
         if (start_index + 10000 <= ADC_BUFFER_SIZE) {
             memcpy(
             temp_buffer,
@@ -184,20 +187,87 @@ esp_err_t ws_handler(httpd_req_t *req) {
         return s;
     }
 
-    // --- Gestione cambio modalità porta ---
+    // --- Gestione "get_encoder_buffer": invio encoder buffer completo ---
+    if (strcmp((const char*)wbuf, "get_encoder_buffer") == 0) {
+        ESP_LOGI(TAG, "Inizio acquisizione encoder_buffer per client");
+        
+        // Snapshot dell'indice corrente
+        uint32_t current_index = encoder_buffer_index;
+        uint32_t start_index = (current_index - ENCODER_BUFFER_SIZE + ENCODER_BUFFER_SIZE) % ENCODER_BUFFER_SIZE;
+        
+        ESP_LOGI(TAG, "Copia buffer: current_index=%u, start_index=%u", current_index, start_index);
+        
+        // Copia con gestione wrap
+        if (start_index + ENCODER_BUFFER_SIZE <= ENCODER_BUFFER_SIZE) {
+            memcpy(temp_encoder_buffer, &encoder_buffer[start_index], ENCODER_BUFFER_SIZE * sizeof(EncoderData));
+        } else {
+            uint32_t first_chunk_size = ENCODER_BUFFER_SIZE - start_index;
+            uint32_t second_chunk_size = ENCODER_BUFFER_SIZE - first_chunk_size;
+            memcpy(temp_encoder_buffer, &encoder_buffer[start_index], first_chunk_size * sizeof(EncoderData));
+            memcpy(&temp_encoder_buffer[first_chunk_size], encoder_buffer, second_chunk_size * sizeof(EncoderData));
+        }
+        
+        ESP_LOGI(TAG, "Buffer copiato, invio binario (%u byte)", ENCODER_BUFFER_SIZE * sizeof(EncoderData));
+        
+        // Invio frame binario
+        httpd_ws_frame_t out_bin = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_BINARY,
+            .payload = (uint8_t*)temp_encoder_buffer,
+            .len = ENCODER_BUFFER_SIZE * sizeof(EncoderData)
+        };
+        esp_err_t ret_bin = httpd_ws_send_frame(req, &out_bin);
+        
+        if (ret_bin != ESP_OK) {
+            ESP_LOGE(TAG, "Errore invio frame binario encoder: %s", esp_err_to_name(ret_bin));
+            buf_put_ws_frame(wbuf);
+            return ret_bin;
+        }
+        
+        ESP_LOGI(TAG, "encoder_buffer inviato al client");
+        
+        // Invio JSON con metadati
+        char json_buffer[256];
+        time_t now;
+        time(&now);
+        snprintf(json_buffer, sizeof(json_buffer), 
+                "{\"encoder_timestamp\":%lld,\"magnitude\":%u}", 
+                (long long)now, (unsigned)lastMagnitude);
+        
+        ESP_LOGI(TAG, "Invio JSON: %s", json_buffer);
+        
+        httpd_ws_frame_t out_json = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t*)json_buffer,
+            .len = strlen(json_buffer)
+        };
+        ret = httpd_ws_send_frame(req, &out_json);
+        
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Timestamp e magnitude inviati al client");
+        }
+        
+        buf_put_ws_frame(wbuf);
+        return ret;
+    }
+
+    // --- Gestione cambio modalitÃ  porta ---
     if (strncmp((const char*)wbuf, "set_door_mode:", 14) == 0) {
         const char* mode_str = (const char*)wbuf + 14;
         DoorMode old_mode = config.door_mode;
         DoorMode new_mode = old_mode;
         
-        // Parse della modalità
-        ESP_LOGI(TAG, "Modalità porta vecchia  %d letta %s", old_mode, mode_str);
+        // Parse della modalitÃ 
+        ESP_LOGI(TAG, "ModalitÃ  porta vecchia  %d letta %s", old_mode, mode_str);
         if (strcmp(mode_str, "AUTO") == 0) new_mode = AUTO;
         else if (strcmp(mode_str, "ALWAYS_OPEN") == 0) new_mode = ALWAYS_OPEN;
         else if (strcmp(mode_str, "ALWAYS_CLOSED") == 0) new_mode = ALWAYS_CLOSED;
         else {
-            // Modalità non valida
-            const char* resp = "Modalità non valida";
+            // ModalitÃ  non valida
+            const char* resp = "ModalitÃ  non valida";
             httpd_ws_frame_t resp_pkt = {
                 .final = true,
                 .fragmented = false, 
@@ -217,7 +287,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
             
 
             
-            ESP_LOGI(TAG, "Modalità porta cambiata da %d a %d", old_mode, new_mode);
+            ESP_LOGI(TAG, "ModalitÃ  porta cambiata da %d a %d", old_mode, new_mode);
             
             // Broadcast a tutti i client
             broadcast_door_mode_change(new_mode);
@@ -272,7 +342,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         ESP_LOGW(TAG, "Connessione WiFi persa, riconnessione...");
         stop_webserver();
         telnet_stop();
-        time_sync_stop();  // opzionale; se lo lasci attivo fallirà e riproverà
+        time_sync_stop();  // opzionale; se lo lasci attivo fallirÃ  e riproverÃ 
 
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
@@ -293,7 +363,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         // Avvio SNTP (time sync) all'ottenimento dell'IP
         time_sync_start();
 
-        // Avvia il webserver fuori dal callback (task dedicata), solo se non già avviato
+        // Avvia il webserver fuori dal callback (task dedicata), solo se non giÃ  avviato
         start_webserver_if_not_running();
     }
 }

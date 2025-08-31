@@ -7,6 +7,7 @@
 #include <driver/ledc.h>
 #include <string.h>
 #include <ctime>
+#include <driver/i2c.h>  // Per le funzioni I2C
 
 static const char *TAG = "DOOR";
 
@@ -14,7 +15,7 @@ static const char *TAG = "DOOR";
 // Variabili globali di stato porta
 // =====================================
 EXT_RAM_BSS_ATTR EncoderData encoder_buffer[ENCODER_BUFFER_SIZE];
-static size_t encoder_buffer_index = 0;
+volatile size_t encoder_buffer_index = 0;
 static volatile bool door_open = false;
 static TickType_t door_timer_start = 0;
 static bool servo_inited = false;
@@ -28,12 +29,94 @@ static volatile uint16_t last_authorized_country_code = 0;
 // Encoder placeholder
 // =====================================
 static uint16_t encoder_readAngle(void) {
-    return 2000;
+    // Ora legge dall'AS5600 invece di restituire valore fisso
+    uint8_t msb, lsb;
+    uint16_t angle = 2000; // Valore di default in caso di errore
+    
+    // Leggi MSB (bits 11:8)
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, 0x0E, true); // AS5600_ANGLE_MSB_REG
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, &msb, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+    
+    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+    
+    if (ret != ESP_OK) return angle;
+    
+    // Leggi LSB (bits 7:0)
+    cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, 0x0F, true); // AS5600_ANGLE_LSB_REG
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, &lsb, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+    
+    ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+    
+    if (ret != ESP_OK) return angle;
+    
+    // Combina MSB e LSB
+    angle = ((uint16_t)(msb & 0x0F) << 8) | lsb;
+    angle &= 0x0FFF; // Limita a 12-bit
+    
+    return angle;
 }
 
 static uint16_t encoder_readMagnitude(void) {
-    return 2100;
+    // Ora legge dall'AS5600 invece di restituire valore fisso
+    uint8_t msb, lsb;
+    uint16_t magnitude = 2100; // Valore di default
+    
+    // Leggi MSB magnitude
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, 0x1B, true); // AS5600_MAGNITUDE_MSB
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, &msb, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+    
+    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+    
+    if (ret != ESP_OK) return magnitude;
+    
+    // Leggi LSB magnitude
+    cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, 0x1C, true); // AS5600_MAGNITUDE_LSB
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, &lsb, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+    
+    ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+    i2c_cmd_link_delete(cmd);
+    
+    if (ret != ESP_OK) return magnitude;
+    
+    // Combina MSB e LSB
+    magnitude = ((uint16_t)(msb & 0x0F) << 8) | lsb;
+    magnitude &= 0x0FFF;
+    
+    return magnitude;
 }
+
+// 3. AGGIUNGI variabile per I2C inizializzato e MODIFICA la funzione door_task():
+
+// Aggiungi questa variabile globale dopo le altre variabili globali in door.cpp:
+static bool encoder_i2c_initialized = false;
+
 
 // =====================================
 // Interrupt handler per infrarossi
@@ -187,6 +270,30 @@ extern "C" void door_task(void *pv) {
     door_gpio_init_once();
     servo_init_once();
 
+    // Inizializza AS5600
+    if (!encoder_i2c_initialized) {
+        i2c_config_t i2c_config = {};
+        i2c_config.mode = I2C_MODE_MASTER;
+        i2c_config.sda_io_num = ENCODER_SDA;
+        i2c_config.scl_io_num = ENCODER_SCL;
+        i2c_config.sda_pullup_en = GPIO_PULLUP_ENABLE;
+        i2c_config.scl_pullup_en = GPIO_PULLUP_ENABLE;
+        i2c_config.master.clk_speed = 400000; // 400kHz
+        
+        esp_err_t ret = i2c_param_config(I2C_NUM_0, &i2c_config);
+        if (ret == ESP_OK) {
+            ret = i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
+        }
+        
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Errore inizializzazione I2C encoder: %s", esp_err_to_name(ret));
+            ESP_LOGW(TAG, "Encoder userà valori di default");
+        } else {
+            encoder_i2c_initialized = true;
+            ESP_LOGI(TAG, "I2C encoder inizializzato su SDA=%d, SCL=%d", ENCODER_SDA, ENCODER_SCL);
+        }
+    }
+
     char time_str[20];
     bool log_emitted = false;
     unsigned long last_unauthorized_log = 0;
@@ -316,6 +423,7 @@ extern "C" void door_task(void *pv) {
             gpio_set_level(DETECTED, LED_ON);
             detect = true;
             is_authorized = false;
+            strcpy(cat_name_evento, "Sconosciuto"); //0830  aggiunto da Arduino
             country_code = last_country_code;
             device_code = last_device_code;
 
@@ -325,7 +433,7 @@ extern "C" void door_task(void *pv) {
                     strncpy(cat_name, config.authorized_cats[i].name.c_str(), sizeof(cat_name) - 1);
                     cat_name[sizeof(cat_name) - 1] = '\0';
                     is_authorized = config.authorized_cats[i].authorized;
-                    country_code = config.authorized_cats[i].country_code;
+                    country_code = config.authorized_cats[i].country_code;  //0830 superfluo
                     break;
                 }
             }
@@ -339,8 +447,11 @@ extern "C" void door_task(void *pv) {
                     country_code_evento = country_code;
                     device_code_evento = device_code;
                     authorized_evento = is_authorized;
+                    ESP_LOGI(TAG, " CODICE");
                 } else if (device_code != device_code_evento || country_code != country_code_evento) {
                     newcode = true;
+                    ESP_LOGI(TAG, " NEWCODE, CC: %u, DC: %llu,ECC: %u, EDC: %llu,",
+                    country_code, (unsigned long long)device_code,country_code_evento, (unsigned long long)device_code_evento);
                 }
             }
 
@@ -373,7 +484,7 @@ extern "C" void door_task(void *pv) {
                     last_unauthorized_log = xTaskGetTickCount();
                 }
             }
-
+            //contaporta = 0; //0830 verificare
             door_sync_count = 0; // Reset dopo elaborazione
         } else {
             gpio_set_level(DETECTED, LED_OFF);
@@ -384,6 +495,7 @@ extern "C" void door_task(void *pv) {
                 door_open = true;
                 door_timer_start = xTaskGetTickCount();
                 setServoPosition(true);
+                //contaporta = 0; //0830 verificare
                 ESP_LOGI(TAG, "[%s] Apertura manuale tramite pulsante", time_str);
                 add_log_entry(now, "Manuale", "Manuale", 0, 0, true);  // CORREZIONE: usa now invece di timestamp_full
                 log_emitted = true;
@@ -406,11 +518,15 @@ extern "C" void door_task(void *pv) {
         uint16_t rawAngle = encoder_readAngle();
         uint16_t magnitude = encoder_readMagnitude();
         (void)magnitude; // Silenzia warning unused
-        bool infrared = gpio_get_level(INFRARED) || interruptFlag;
+        bool infrared = gpio_get_level(INFRARED) || interruptFlag;  // Sente sia il livello che i fronti in interrupt
         interruptFlag = false;
 
         // LED blu per infrarosso
         gpio_set_level(LED_BLU, infrared ? LED_ON : LED_OFF);
+
+         if (rawAngle == 0xFFFF) {
+            rawAngle = 0x3FFF; // Gestione errore
+        }
 
         // Calcolo correctedAngle (logica Arduino identica)
         uint16_t correctedAngle;
@@ -433,6 +549,8 @@ extern "C" void door_task(void *pv) {
                 correctedAngle = 2048;
             }
         }
+
+        
 
         // ANALISI EVENTI (logica Arduino identica)
         int32_t angolo_deviazione = abs((int32_t)correctedAngle - 2048);
@@ -515,7 +633,7 @@ extern "C" void door_task(void *pv) {
                 ESP_LOGI(TAG, "Evento chiuso forzatamente per newcode, tipo: %s, Nome: %s, Durata: %.2f s", 
                          tipo, cat_name_evento, durata_effettiva);
                 stato = IDLE;
-                
+                codice_associato = false;
                 // Reinizializza per nuovo evento se trigger ancora attivo
                 if (trigger) {
                     stato = EVENTO_ATTIVO;
@@ -554,6 +672,17 @@ extern "C" void door_task(void *pv) {
                 ESP_LOGI(TAG, "Evento terminato, tipo: %s, Nome: %s, Durata: %.2f s", 
                          tipo, cat_name_evento, durata_effettiva);
                 stato = IDLE;
+
+                //0830   questo pezzo aggiundo copiato da Arduino
+                passaggio_confermato = false;
+                direzione = NULL;
+                conteggio_senza_trigger = 0;
+                ultimo_trigger_idx = 0;
+                trigger_porta_idx = -1;
+                passaggio_porta_idx = -1;
+                detect_idx = -1;
+                infrared_idx = -1;
+                codice_associato = false;
             }
         }
 
@@ -562,11 +691,15 @@ extern "C" void door_task(void *pv) {
         data.rawAngle = correctedAngle & 0xFFF; // 12 bit
         data.infrared = infrared ? 1 : 0;
         data.detect = detect ? 1 : 0;
-        data.door_open = door_open ? 1 : 0;
+        data.door_open = door_open ? 1 : 0;   
         data.newcode = newcode ? 1 : 0;
         
         encoder_buffer[encoder_buffer_index] = data;
         encoder_buffer_index = (encoder_buffer_index + 1) % ENCODER_BUFFER_SIZE;
+
+        lastRawAngle = rawAngle;
+        lastMagnitude = magnitude;
+        lastCorrectedAngle = correctedAngle;
 
         vTaskDelayUntil(&last_wake_time, interval);
     }

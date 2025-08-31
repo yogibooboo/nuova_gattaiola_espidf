@@ -38,6 +38,10 @@ static constexpr uint32_t RMT_RES_HZ   = 40'000'000;
 static constexpr uint32_t PERIOD_TICKS = 298;                    // 7.45 us
 static constexpr uint16_t HALF_TICKS   = PERIOD_TICKS / 2;       // 149
 
+volatile uint16_t lastRawAngle = 0;
+volatile uint16_t lastMagnitude = 0;
+volatile uint16_t lastCorrectedAngle = 0;
+
 
 // ---------- FDX-B test sequence (128 bit), identica ad Arduino ----------
 static const uint8_t fdx_b_sequence[128] = {
@@ -216,7 +220,7 @@ void print_task(void *pvParameters) {
         // Stampa “pulita” senza prefisso di ESP_LOGx
         std::printf(
             "[%s] Sync: %u, OK: %u, Last Seq: [%02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X], "
-            "DC: %llu, CC: %u, diff: %u, freq: %u, a_s: %ld, lastADC: %u\n",
+            "DC: %llu, CC: %u, diff: %u, freq: %u, a_s: %ld, lastADC: %u,Angle:%u/%u,mag:%u\n",
             time_str,
             (unsigned)sync_count,
             (unsigned)display_sync_count,
@@ -226,7 +230,10 @@ void print_task(void *pvParameters) {
             (unsigned)(i_interrupt - ia),
             (unsigned)freq,
             (long)available_samples,
-            (unsigned)datoadc
+            (unsigned)datoadc,
+            lastRawAngle, 
+            lastCorrectedAngle, 
+            lastMagnitude
         );
 
         // Reset contatori “per stampa” come sul vecchio sketch

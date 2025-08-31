@@ -29,9 +29,9 @@ int32_t           peaks[PEAKS_BUFFER_SIZE];
 int32_t           dist[DIST_BUFFER_SIZE];
 Bit               bits[DIST_BUFFER_SIZE];
 uint8_t           bytes[10];
-int32_t           num_picchi = 0;
-int32_t           num_distanze = 0;
-int32_t           num_bits = 0;
+uint32_t           num_picchi = 0;
+uint32_t           num_distanze = 0;
+uint32_t           num_bits = 0;
 uint16_t          country_code = 0;
 uint64_t          device_code = 0;
 bool              crc_ok = false;
@@ -174,9 +174,12 @@ static void media_correlazione_32() {
     if (!initialized) {
         num_picchi = num_distanze = num_bits = 0;
         for (int j=0;j<10;j++) bytes[j]=0;
-        for (int j=0;j<CORR_BUFFER_SIZE;j++){ filt[j]=0; corr[j]=0; }
+        for (int j=0;j<CORR_BUFFER_SIZE;j++){ filt[j]=0; corr[j]=0; peaks[j]=0; dist[j]=0;}
         initialized = true;
     }
+
+    ia = 32;
+    vTaskDelay(10 / portTICK_PERIOD_MS);     //assicura che inizialmente ci siano un pò di campioni
 
     while (true) {
         available_samples = (int32_t)(i_interrupt - ia);
@@ -191,7 +194,7 @@ static void media_correlazione_32() {
 
         datoadc=adc_buffer[(ia) & 0x3FFF]; // per log
 
-        if (ia >= (uint32_t)lunghezza_correlazione) {
+        //if (ia >= 32) {tolto, rimpiazzato con inizializzazione ia a 32 e ritardo iniziale per assicurare i primi 32 campioni
             gpio_set_level(SCOPE_1, 1);
             int32_t sum = 0;
             for(int j = 0; j < 8; j++) {
@@ -239,7 +242,7 @@ static void media_correlazione_32() {
             }
 
             // Distanze/bit
-            if (num_picchi > 1 && newpeak) {
+            if (newpeak) {    //tolto  if (num_picchi > 1 && newpeak) { che bloccava in overflow negativo
                 ultima_distanza = peaks[(num_picchi - 1) & 0xFF] - peaks[(num_picchi - 2) & 0xFF];
                 dist[num_distanze & 0xFF] = ultima_distanza;
                 num_distanze++;
@@ -346,7 +349,7 @@ static void media_correlazione_32() {
                 }
                 numbit--;
             }
-        }
+        //} //if (ia >= 32) tolto
         
         ia++; // prossimo campione
     }
