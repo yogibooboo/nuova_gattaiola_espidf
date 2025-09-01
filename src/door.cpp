@@ -674,7 +674,7 @@ extern "C" void door_task(void *pv) {
                 stato = IDLE;
 
                 //0830   questo pezzo aggiundo copiato da Arduino
-                passaggio_confermato = false;
+                /*passaggio_confermato = false;
                 direzione = NULL;
                 conteggio_senza_trigger = 0;
                 ultimo_trigger_idx = 0;
@@ -682,7 +682,7 @@ extern "C" void door_task(void *pv) {
                 passaggio_porta_idx = -1;
                 detect_idx = -1;
                 infrared_idx = -1;
-                codice_associato = false;
+                codice_associato = false;*/
             }
         }
 

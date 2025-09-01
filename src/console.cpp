@@ -1,4 +1,4 @@
-// src/console.cpp
+// src/console.cpp - Sistema di logging e console unificato
 #include "console.h"
 
 #include <stdio.h>
@@ -12,76 +12,55 @@
 #include "sdkconfig.h"
 
 #include <esp_log.h>
-#include <time.h>   // <-- necessario per time_t, time(), localtime_r(), strftime()
+#include <time.h>
 #include "time_sync.h"
 
-
 // ============================
-// Configurazione console
+// Configurazione
 // ============================
 
-// Tempo dopo il quale i log si riattivano automaticamente se la console resta inattiva (ms)
 #ifndef CONSOLE_AUTORESTORE_MS
-#define CONSOLE_AUTORESTORE_MS 60000  // 60 secondi
+#define CONSOLE_AUTORESTORE_MS 20000  // 20 secondi per test
 #endif
 
-// Stack della task console
 #ifndef CONSOLE_TASK_STACK
 #define CONSOLE_TASK_STACK 4096
 #endif
 
-// Priorità della task console
 #ifndef CONSOLE_TASK_PRIO
 #define CONSOLE_TASK_PRIO 5
 #endif
 
 // ============================
-// Stato interno
+// Sistema di logging unificato - STATO UNICO
 // ============================
 
-//static const char* TAGC = "CLI";  // usato solo per printf, non per ESP_LOGx
+// UNICO STATO GLOBALE - tutte le interfacce usano questo
+static volatile bool s_logs_muted = false;
+static volatile log_level_t s_current_log_level = LOG_INFO;
+static TimerHandle_t s_resume_timer = nullptr;
 
-static volatile bool s_logs_muted = false;     // true -> log ESP mutati
-static TimerHandle_t s_resume_timer = nullptr; // timer auto-ripristino log
-
-// ============================
-// Router dei log ESP-IDF
-// ============================
-
-
-
-static void cli_write_both(const char* s, size_t len) {
-    // seriale
-    fwrite(s, 1, len, stdout);
+// Scrive sia su seriale che su telnet
+static void write_both_interfaces(const char* data, size_t len) {
+    // Seriale
+    fwrite(data, 1, len, stdout);
     fflush(stdout);
 
-    // telnet (con LF -> CRLF)
+    // Telnet con conversione LF -> CRLF
     if (telnet_has_client()) {
         size_t start = 0;
         for (size_t i = 0; i < len; ++i) {
-            if (s[i] == '\n') {
-                if (i > start) telnet_write_best_effort(s + start, i - start);
+            if (data[i] == '\n') {
+                if (i > start) telnet_write_best_effort(data + start, i - start);
                 telnet_write_best_effort("\r\n", 2);
                 start = i + 1;
             }
         }
-        if (start < len) telnet_write_best_effort(s + start, len - start);
+        if (start < len) telnet_write_best_effort(data + start, len - start);
     }
 }
 
-static void cli_puts(const char* s) { cli_write_both(s, strlen(s)); }
-
-static void cli_printf(const char* fmt, ...) {
-    char b[512];
-    va_list ap; va_start(ap, fmt);
-    int n = vsnprintf(b, sizeof(b), fmt, ap);
-    va_end(ap);
-    if (n <= 0) return;
-    size_t len = (size_t)((n < (int)sizeof(b)) ? n : (int)sizeof(b));
-    cli_write_both(b, len);
-}
-
-
+// Router principale per tutti i log ESP-IDF
 static int vprintf_router(const char* fmt, va_list ap) {
     if (s_logs_muted) return 0;
 
@@ -92,71 +71,108 @@ static int vprintf_router(const char* fmt, va_list ap) {
     va_end(copy);
     if (n < 0) return 0;
 
-    // stampa locale (seriale)
     size_t to_write = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
-    fwrite(buf, 1, to_write, stdout);
-    fflush(stdout);
-
-    // duplica verso telnet client, con conversione LF -> CRLF
-    if (telnet_has_client()) {
-        size_t start = 0;
-        for (size_t i = 0; i < to_write; ++i) {
-            if (buf[i] == '\n') {
-                if (i > start) {
-                    telnet_write_best_effort(buf + start, i - start);
-                }
-                telnet_write_best_effort("\r\n", 2);
-                start = i + 1;
-            }
-        }
-        if (start < to_write) {
-            telnet_write_best_effort(buf + start, to_write - start);
-        }
-    }
+    write_both_interfaces(buf, to_write);
     return n;
 }
 
-
-// API visibili dal resto del progetto
-extern "C" void logs_mute(bool on) {
-    s_logs_muted = on;
-    esp_log_level_set("*", on ? ESP_LOG_NONE
-                              : (esp_log_level_t)CONFIG_LOG_DEFAULT_LEVEL);
-}
-
-extern "C" void logs_resume(void) {
-    s_logs_muted = false;
-    esp_log_level_set("*", (esp_log_level_t)CONFIG_LOG_DEFAULT_LEVEL);
-}
-
-extern "C" bool logs_are_muted(void) { return s_logs_muted; }
-
-
-
 // ============================
-// Utility locali
+// API pubblica per logging unificato
 // ============================
 
-static inline void schedule_resume_timer() {
+// Logging unificato senza tag (per sostituire std::printf)
+extern "C" void unified_log_raw(const char* fmt, ...) {
+    if (s_logs_muted) return;
+    
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    
+    if (n > 0) {
+        size_t len = (n < (int)sizeof(buf)) ? (size_t)n : sizeof(buf) - 1;
+        write_both_interfaces(buf, len);
+    }
+}
+
+// Imposta livello di log
+extern "C" void set_log_level(log_level_t level) {
+    s_current_log_level = level;
+}
+
+extern "C" log_level_t get_log_level(void) {
+    return s_current_log_level;
+}
+
+// ============================
+// Gestione timer - funzioni interne
+// ============================
+
+static void schedule_resume_timer() {
     if (!s_resume_timer) return;
-    // (ri)programma il timer one-shot
     xTimerStop(s_resume_timer, 0);
     xTimerChangePeriod(s_resume_timer, pdMS_TO_TICKS(CONSOLE_AUTORESTORE_MS), 0);
     xTimerStart(s_resume_timer, 0);
 }
 
-static inline void cancel_resume_timer() {
+static void cancel_resume_timer() {
     if (!s_resume_timer) return;
     xTimerStop(s_resume_timer, 0);
 }
 
-// NIENTE ESP_LOGx nella callback del timer!
 static void on_resume_timer(TimerHandle_t) {
-    // Riattiva semplicemente i log
     logs_resume();
 }
 
-// Trim spazi in coda
+// ============================
+// Gestione stato console - UNICO PUNTO DI CONTROLLO
+// ============================
+
+extern "C" void logs_mute(bool on) {
+    s_logs_muted = on;
+}
+
+extern "C" void logs_resume(void) {
+    s_logs_muted = false;
+}
+
+extern "C" bool logs_are_muted(void) { 
+    return s_logs_muted; 
+}
+
+// API per gestire il timer da qualsiasi interfaccia
+extern "C" void schedule_resume_timer_public() {
+    schedule_resume_timer();
+}
+
+extern "C" void cancel_resume_timer_public() {
+    cancel_resume_timer();
+}
+
+// ============================
+// Utility CLI
+// ============================
+
+static void cli_write(const char* s, size_t len) {
+    write_both_interfaces(s, len);
+}
+
+static void cli_puts(const char* s) { 
+    cli_write(s, strlen(s)); 
+}
+
+static void cli_printf(const char* fmt, ...) {
+    char b[256];
+    va_list ap; 
+    va_start(ap, fmt);
+    int n = vsnprintf(b, sizeof(b), fmt, ap);
+    va_end(ap);
+    if (n <= 0) return;
+    size_t len = (size_t)((n < (int)sizeof(b)) ? n : (int)sizeof(b));
+    cli_write(b, len);
+}
+
 static void rtrim(char* s) {
     size_t n = strlen(s);
     while (n && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\r' || s[n-1] == '\n')) {
@@ -164,7 +180,6 @@ static void rtrim(char* s) {
     }
 }
 
-// Confronto case-insensitive su stringhe semplici
 static bool streq_ci(const char* a, const char* b) {
     while (*a && *b) {
         if (tolower((unsigned char)*a) != tolower((unsigned char)*b)) return false;
@@ -174,30 +189,27 @@ static bool streq_ci(const char* a, const char* b) {
 }
 
 // ============================
-// Parser comandi minimal
+// Parser comandi
 // ============================
 
 static void print_help() {
     cli_puts("\nComandi disponibili:\n");
     cli_puts("  help            - mostra questo aiuto\n");
     cli_puts("  log on          - riattiva i log\n");
-    cli_puts("  log off         - mette in pausa i log (resta nel prompt)\n");
+    cli_puts("  log level <0-4> - imposta livello log (0=ERROR, 1=WARN, 2=INFO, 3=DEBUG, 4=VERBOSE)\n");
+    cli_puts("  time            - mostra ora corrente\n");
+    cli_puts("  ntp now         - forza sincronizzazione NTP\n");
+    cli_puts("  ntp status      - stato sincronizzazione NTP\n");
     cli_puts("\nSuggerimento: premi INVIO a vuoto per mettere in pausa i log e scrivere comandi.\n\n");
-
-    fflush(stdout);
 }
 
 static void exec_command(const char* line) {
-    // Copia locale per normalizzare
     char cmd[256];
     strncpy(cmd, line, sizeof(cmd)-1);
     cmd[sizeof(cmd)-1] = '\0';
     rtrim(cmd);
 
-    if (cmd[0] == '\0') {
-        // riga vuota: niente
-        return;
-    }
+    if (cmd[0] == '\0') return;
 
     if (streq_ci(cmd, "help") || streq_ci(cmd, "?")) {
         print_help();
@@ -205,44 +217,37 @@ static void exec_command(const char* line) {
     }
 
     if (streq_ci(cmd, "log on")) {
-        logs_resume();
         cancel_resume_timer();
-        ESP_LOGI("CLI","test log dopo log on");
-        cli_puts("OK: log attivi\n");
-        fflush(stdout);
-        
+        logs_resume();
+        cli_puts("OK: log riattivati\n");
         return;
     }
 
-    if (streq_ci(cmd, "log off")) {
-        logs_mute(true);
-        schedule_resume_timer();
-        cli_puts("OK: log in pausa\n");
-        fflush(stdout);
+    // Comando per livello log
+    if (strncmp(cmd, "log level ", 10) == 0) {
+        int level = atoi(cmd + 10);
+        if (level >= 0 && level <= 4) {
+            set_log_level((log_level_t)level);
+            const char* level_names[] = {"ERROR", "WARN", "INFO", "DEBUG", "VERBOSE"};
+            cli_printf("OK: livello log impostato a %d (%s)\n", level, level_names[level]);
+        } else {
+            cli_puts("ERR: livello deve essere 0-4\n");
+        }
         return;
     }
-
-
-// ...
 
     if (streq_ci(cmd, "time")) {
         time_t now = 0;
         time(&now);
-        struct tm lt; localtime_r(&now, &lt);
+        struct tm lt; 
+        localtime_r(&now, &lt);
 
         char buf[64];
         strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &lt);
 
-        cli_puts("Ora locale: ");
-        cli_puts(buf);
-        cli_puts("\n");
-
-        cli_puts("Epoch: ");
-        char eb[32]; snprintf(eb, sizeof(eb), "%ld\n", (long)now);
-        cli_puts(eb);
-
-        cli_puts("Valid sync: ");
-        cli_puts(time_sync_is_valid() ? "yes\n" : "no\n");
+        cli_printf("Ora locale: %s\n", buf);
+        cli_printf("Epoch: %ld\n", (long)now);
+        cli_printf("Valid sync: %s\n", time_sync_is_valid() ? "yes" : "no");
         return;
     }
 
@@ -253,120 +258,96 @@ static void exec_command(const char* line) {
     }
 
     if (streq_ci(cmd, "ntp status")) {
-        cli_puts("Ultimo server: ");
-        cli_puts(time_sync_server_used());
-        cli_puts("\n");
+        cli_printf("Ultimo server: %s\n", time_sync_server_used());
 
         time_t last = time_sync_last_epoch();
         if (last > 0) {
-            struct tm lt; localtime_r(&last, &lt);
+            struct tm lt; 
+            localtime_r(&last, &lt);
             char buf[64];
             strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &lt);
-            cli_puts("Ultimo sync: ");
-            cli_puts(buf);
-            cli_puts("\n");
+            cli_printf("Ultimo sync: %s\n", buf);
         } else {
             cli_puts("Ultimo sync: n/a\n");
         }
-        cli_puts("Valido: ");
-        cli_puts(time_sync_is_valid() ? "yes\n" : "no\n");
+        cli_printf("Valido: %s\n", time_sync_is_valid() ? "yes" : "no");
         return;
     }
 
-    // Qui puoi aggiungere altri comandi: es. "reset", "door open", ecc.
-
-    // Default: comando sconosciuto
+    // Comando sconosciuto
     cli_puts("ERR: comando sconosciuto. Digita 'help'\n");
-    fflush(stdout);
 }
 
 extern "C" void cli_exec_line(const char* line) {
     exec_command(line);
 }
 
-
-
 // ============================
 // Task della console
 // ============================
 
 static void console_task(void*) {
-    // Non toccare il buffering di stdin (deve restare bufferizzato).
-    // Va bene disabilitare il buffering su stdout/stderr per vedere subito il prompt.
-    // setvbuf(stdin,  nullptr, _IONBF, 0); // <-- NON FARLO
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
 
-    // Messaggio iniziale
-    printf("Console pronta. Premi INVIO per mettere in pausa i log e digitare comandi. Digita 'help'.\n");
-    fflush(stdout);
+    unified_log_raw("Console pronta. Premi INVIO per mettere in pausa i log e digitare comandi. Digita 'help'.\n");
 
-    bool paused = false;
     bool printed_prompt = false;
     bool last_was_cr = false;
     
     char line[256];
     size_t pos = 0;
-    
 
     auto ensure_prompt = [&](){
-        if (!printed_prompt){
-            printf("(log in pausa) > ");
-            fflush(stdout);
+        if (!printed_prompt && logs_are_muted()){
+            cli_puts("(log in pausa) > ");
             printed_prompt = true;
         }
     };
-    auto enter_paused = [&](){
-        if (!paused){
-            logs_mute(true);                 // ferma subito i log
-            paused = true;
+    
+    auto handle_pause = [&](){
+        if (!logs_are_muted()){
+            logs_mute(true);
             printed_prompt = false;
             pos = 0;
-            schedule_resume_timer();         // auto-resume dopo inattività
+            schedule_resume_timer();
         }
-        ensure_prompt();                     // mostra il prompt UNA sola volta
-    };
-    auto leave_paused = [&](){
-        if (paused){
-            cancel_resume_timer();
-            paused = false;
-            printed_prompt = false;
-            pos = 0;
-
-                printf("\n");                    // riga pulita per il ritorno dei log
-            fflush(stdout);
-        }
+        ensure_prompt();
     };
 
     for (;;){
-        // Se il timer ha riattivato i log, allinea lo stato locale
-        if (paused && !logs_are_muted()){
-            leave_paused();
+        // Resetta prompt se i log sono ripartiti (timer auto-resume)
+        if (!logs_are_muted()) {
+            printed_prompt = false;
         }
 
         int c = fgetc(stdin);
         if (c == '\r') {
             last_was_cr = true;
-            c = '\n'; // processa come newline unica
+            c = '\n';
         } else if (c == '\n') {
             if (last_was_cr) {
                 last_was_cr = false;
-                continue;   // ignora la \n successiva a una \r
+                continue;
             }
         } else {
             last_was_cr = false;
         }
+        
         if (c == EOF){
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
         }
 
-        // ⬇️ QUALSIASI tasto mette in pausa i log e apre il prompt
-        if (!paused){
-            enter_paused();
+        // Qualsiasi tasto mette in pausa
+        if (!logs_are_muted() && c != '\n'){
+            logs_mute(true);
+            printed_prompt = false;
+            pos = 0;
+            schedule_resume_timer();
         }
+        ensure_prompt();
 
-        // === editing linea con echo (siamo in pausa) ===
         if (c == '\n') {
             line[pos] = '\0';
             rtrim(line);
@@ -378,73 +359,68 @@ static void console_task(void*) {
             }
 
             bool want_log_on = streq_ci(line, "log on");
-            
-
             exec_command(line);
             pos = 0;
 
             if (want_log_on) {
-                leave_paused();              // esci SUBITO: i log ripartono
+                // I log ripartono - non serve più il prompt
+                printed_prompt = false;
+                cancel_resume_timer();
+                cli_puts("\n"); // Nuova riga per separare dal prompt
             } else {
                 ensure_prompt();
                 schedule_resume_timer();
             }
-        continue;
+            continue;
         }
 
-        
-
-        // backspace/delete
+        // Backspace
         if (c == 0x08 || c == 0x7F){
             if (pos){
                 pos--;
-                printf("\b \b");
-                fflush(stdout);
+                cli_puts("\b \b");
             }
             schedule_resume_timer();
             continue;
         }
 
-        // caratteri stampabili
+        // Caratteri stampabili
         if (c >= 32 && c < 127){
             if (pos < sizeof(line) - 1){
                 line[pos++] = (char)c;
-                putchar(c);                   // echo locale
-                fflush(stdout);
+                char echo[2] = {(char)c, '\0'};
+                cli_puts(echo);
             }
             schedule_resume_timer();
             continue;
         }
-
-        // altri caratteri: ignora
     }
-
 }
 
 // ============================
-// Avvio console (API)
+// API pubblica
 // ============================
 
 extern "C" void console_start(void) {
-    // Instrada i log ESP-IDF attraverso il router
+    // Instrada tutti i log ESP-IDF attraverso il nostro router
     esp_log_set_vprintf(vprintf_router);
 
-    // Crea il timer one-shot per auto-ripristino log
+    // Crea timer auto-resume
     if (!s_resume_timer) {
         s_resume_timer = xTimerCreate(
-            "cli_resume",
+            "console_resume",
             pdMS_TO_TICKS(CONSOLE_AUTORESTORE_MS),
-            pdFALSE,             // one-shot
+            pdFALSE,
             nullptr,
             on_resume_timer
         );
     }
 
-    // Crea la task della console
-   xTaskCreatePinnedToCore(
-    console_task, "console",
-    CONSOLE_TASK_STACK, nullptr,
-    CONSOLE_TASK_PRIO, nullptr,
-    0 /* core 0 */
+    // Avvia task console
+    xTaskCreatePinnedToCore(
+        console_task, "console",
+        CONSOLE_TASK_STACK, nullptr,
+        CONSOLE_TASK_PRIO, nullptr,
+        0 /* core 0 */
     );
 }

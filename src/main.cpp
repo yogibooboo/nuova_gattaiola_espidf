@@ -27,6 +27,9 @@ extern "C" esp_err_t spiffs_get_info(size_t* total, size_t* used);
 
 extern "C" void door_task(void *pv);
 
+// Dichiarazioni per il logging unificato
+extern "C" void unified_log_raw(const char* fmt, ...);
+
 static const char* TAG = "MAIN_APP";
 static const char* TAG_RMT = "RMT134";
 
@@ -42,7 +45,6 @@ volatile uint16_t lastRawAngle = 0;
 volatile uint16_t lastMagnitude = 0;
 volatile uint16_t lastCorrectedAngle = 0;
 
-
 // ---------- FDX-B test sequence (128 bit), identica ad Arduino ----------
 static const uint8_t fdx_b_sequence[128] = {
     0,0,0,0,0,0,0,0,0,0,1,0,0,1,0,1,0,1,0,1,1,0,1,1,1,0,1,1,1,1,0,1,
@@ -55,7 +57,7 @@ static const uint8_t fdx_b_sequence[128] = {
 static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)F134KHZ)
 {
     if (s_rmt_chan) {
-        ESP_LOGI(TAG_RMT, "Carrier già avviata");
+        ESP_LOGI(TAG_RMT, "Carrier giÃ  avviata");
         return ESP_OK;
     }
 
@@ -92,9 +94,8 @@ static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)F134KHZ)
     return ESP_OK;
 }
 
-// Ferma e rilascia le risorse (se/quando servirà)
+// Ferma e rilascia le risorse (se/quando servirÃ )
 static void pwm134_stop(void)
-
 {
     if (!s_rmt_chan) return;
 
@@ -116,7 +117,6 @@ static void pwm134_stop(void)
 
 // ---------- FDX-B test (GPTimer) ----------
 
-
 // In Arduino: timer @ 2.5 MHz, HALF_BIT_TICKS=298 → 119.2 µs
 // Qui replichiamo identico: GPTimer @ 2.5 MHz, allarme ogni 298 tick
 #define FDX_TIMER_RES_HZ    2500000
@@ -137,10 +137,10 @@ static bool IRAM_ATTR fdx_on_alarm_cb(gptimer_handle_t, const gptimer_alarm_even
 
     bool first_half_value = !s_fdx_last_half_value;
     if ((idx & 1) == 0) {
-        // prima metà
+        // prima metà 
         gpio_set_level(FDX_B_PIN, first_half_value);
     } else {
-        // seconda metà
+        // seconda metà 
         bool second_half_value = (bit == 0) ? !first_half_value : first_half_value;
         gpio_set_level(FDX_B_PIN, second_half_value);
         s_fdx_last_half_value = second_half_value;
@@ -189,8 +189,6 @@ static esp_err_t start_fdx_test_if_enabled(void)
     return ESP_OK;
 }
 
-
-
 // --- implementazione task ---
 void print_task(void *pvParameters) {
     TickType_t last_wake_time = xTaskGetTickCount();
@@ -200,25 +198,24 @@ void print_task(void *pvParameters) {
     uint32_t freq = 0;
 
     for (;;) {
-        // Frequenza di campionamento “effettiva”, come nel codice Arduino
+        // Frequenza di campionamento "effettiva", come nel codice Arduino
         freq = i_interrupt - last_i_interrupt;
         last_i_interrupt = i_interrupt;
 
-        // Timestamp locale “umano”
+        // Timestamp locale "umano"
         time_t now = 0;
         time(&now);
         struct tm lt;
         localtime_r(&now, &lt);
         char time_str[20];
-        // Se vuoi formato esteso usa "%d-%m-%Y %H:%M:%S"
         strftime(time_str, sizeof(time_str), "%H:%M:%S", &lt);
 
-        // Copia sicura dell’ultima sequenza (evita tearing durante la stampa)
+        // Copia sicura dell'ultima sequenza (evita tearing durante la stampa)
         uint8_t seq[10];
         for (int i = 0; i < 10; ++i) seq[i] = last_sequence[i];
 
-        // Stampa “pulita” senza prefisso di ESP_LOGx
-        std::printf(
+        // MODIFICA PRINCIPALE: Usa unified_log_raw invece di std::printf
+        unified_log_raw(
             "[%s] Sync: %u, OK: %u, Last Seq: [%02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X], "
             "DC: %llu, CC: %u, diff: %u, freq: %u, a_s: %ld, lastADC: %u,Angle:%u/%u,mag:%u\n",
             time_str,
@@ -236,7 +233,7 @@ void print_task(void *pvParameters) {
             lastMagnitude
         );
 
-        // Reset contatori “per stampa” come sul vecchio sketch
+        // Reset contatori "per stampa" come sul vecchio sketch
         sync_count = 0;
         display_sync_count = 0;
 
@@ -285,13 +282,11 @@ extern "C" void app_main()
     // Avvia FDX-B test (GPTimer) se abilitato da config.config_01
     ESP_ERROR_CHECK(start_fdx_test_if_enabled());
 
-    start_rfid_task();   // crea task su core 1 e avvia il GPTimer per l’ADC
+    start_rfid_task();   // crea task su core 1 e avvia il GPTimer per l'ADC
 
     // Task di stampa sul CORE 0
     xTaskCreatePinnedToCore(print_task, "Print_Task", 4096, nullptr, 1, nullptr, 0);
 
     // Task porta su CORE 0 (RFID rimane su core 1 dentro start_rfid_task)
-
     xTaskCreatePinnedToCore(door_task, "Door_Task", 4096, nullptr, 5, nullptr, 0);
-
 }

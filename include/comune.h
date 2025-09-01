@@ -80,10 +80,10 @@ typedef struct {
     uint32_t servo_open_us;
     uint32_t servo_closed_us;
     uint32_t servo_transition_ms;
-    uint32_t config_01;
-    uint32_t config_02;
-    uint32_t config_03;
-    uint32_t config_04;
+    uint32_t config_01; //RTX_B disable =0:
+    uint32_t config_02; //Soglia porta trig:
+    uint32_t config_03; //Soglia porta open:
+    uint32_t config_04; //Door event durata:
     uint32_t config_05;
     uint32_t config_06;
     uint32_t config_07;

@@ -5,7 +5,6 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-#include <freertos/timers.h>
 
 #include <lwip/sockets.h>
 #include <lwip/netdb.h>
@@ -19,33 +18,13 @@ static const char* TAG = "TELNET";
 #ifndef TELNET_PRIO
 #define TELNET_PRIO  5
 #endif
-#ifndef TELNET_AUTORESTORE_MS
-#define TELNET_AUTORESTORE_MS 60000
-#endif
 
-// Stato globale (una sola sessione)
+// Stato globale (una sola sessione) - SEMPLIFICATO
 static TaskHandle_t     s_listener_task = nullptr;
 static TaskHandle_t     s_session_task  = nullptr;
-static TimerHandle_t    s_resume_timer  = nullptr;
 static int              s_listen_sock   = -1;
 static int              s_client_sock   = -1;
-static volatile bool    s_client_paused = false;  // pausa CLI lato rete
 static volatile bool    s_running       = false;
-
-static void autoresume_kick() {
-    if (!s_resume_timer) return;
-    xTimerStop(s_resume_timer, 0);
-    xTimerChangePeriod(s_resume_timer, pdMS_TO_TICKS(TELNET_AUTORESTORE_MS), 0);
-    xTimerStart(s_resume_timer, 0);
-}
-static void autoresume_cancel() {
-    if (!s_resume_timer) return;
-    xTimerStop(s_resume_timer, 0);
-}
-static void on_resume_timer(TimerHandle_t) {
-    logs_resume();              // ripristina i log globali
-    s_client_paused = false;    // esci dalla "modalità prompt" lato telnet
-}
 
 // Best-effort send (non blocca; se la socket non è pronta, si perde il pezzo)
 void telnet_write_best_effort(const char* data, size_t len) {
@@ -66,42 +45,49 @@ static void close_client() {
         close(s_client_sock);
         s_client_sock = -1;
     }
-    s_client_paused = false;
-    autoresume_cancel();
 }
 
 static void session_task(void* pv) {
     (void)pv;
-    ESP_LOGI(TAG, "Sessione aperta");
+    ESP_LOGI(TAG, "Sessione telnet aperta");
 
-    // editor riga minimal con echo (stile seriale)
+    // editor riga minimal con echo
     char line[256];
     size_t pos = 0;
     bool last_was_cr = false;
+    bool printed_prompt = false;
 
     // prompt helper
     auto send_prompt = [&](){
-        static const char* p = "(log in pausa) > ";
-        send(s_client_sock, p, strlen(p), 0);
+        if (!printed_prompt && logs_are_muted()) {
+            static const char* p = "(log in pausa) > ";
+            send(s_client_sock, p, strlen(p), 0);
+            printed_prompt = true;
+        }
     };
 
-    // all’avvio i log scorrono; qualunque tasto mette in pausa
     for (;;) {
+        // Resetta prompt se i log sono ripartiti
+        if (!logs_are_muted()) {
+            printed_prompt = false;
+        }
+
         char c;
         int n = recv(s_client_sock, &c, 1, 0);
         if (n == 0 || n == -1) {
-            // chiuso dal peer o errore
-            break;
+            break; // chiuso dal peer o errore
         }
 
-        if (!s_client_paused) {
-            // qualunque carattere -> pausa globale
-            logs_mute(true);
-            s_client_paused = true;
-            pos = 0;
-            send_prompt();
-            autoresume_kick();
+        // Qualsiasi carattere (tranne \n) mette in pausa e riavvia timer
+        if (!logs_are_muted()) {
+            if (c != '\n') {  // Ferma i log per qualsiasi carattere tranne \n
+                logs_mute(true);
+                pos = 0;
+                printed_prompt = false;
+            }
         }
+        schedule_resume_timer_public(); // Riavvia timer ogni carattere
+        send_prompt();
 
         // normalizza CRLF -> un solo '\n'
         if (c == '\r') { last_was_cr = true; c = '\n'; }
@@ -115,7 +101,6 @@ static void session_task(void* pv) {
                 const char bs[3] = {'\b',' ','\b'};
                 send(s_client_sock, bs, 3, 0);
             }
-            autoresume_kick();
             continue;
         }
 
@@ -127,25 +112,24 @@ static void session_task(void* pv) {
             if (pos == 0) {
                 // invio a vuoto: resta in pausa
                 send_prompt();
-                autoresume_kick();
                 continue;
             }
 
-            // esegui il comando con lo stesso parser della seriale
-            cli_exec_line(line);     // <--- UN SOLO PUNTO DI VERITÀ
+            // esegui il comando - UNICO PARSER (gestisce tutto internamente)
+            cli_exec_line(line);
 
             pos = 0;
 
-            // se i log sono ancora mutati -> resta al prompt
-            if (logs_are_muted()) {
-                send_prompt();
-                autoresume_kick();
-            } else {
-                // i log sono attivi: esci dalla modalità prompt (niente echo)
-                s_client_paused = false;
-                autoresume_cancel();
+            // Controlla il risultato finale dello stato dei log
+            if (!logs_are_muted()) {
+                // Log riattivati (es. comando "log on") - niente più prompt
+                printed_prompt = false;
                 static const char* nl = "\r\n";
                 send(s_client_sock, nl, 2, 0);
+            } else {
+                // Log ancora in pausa - riavvia timer e mostra prompt
+                schedule_resume_timer_public();
+                send_prompt();
             }
             continue;
         }
@@ -156,12 +140,11 @@ static void session_task(void* pv) {
                 line[pos++] = c;
                 send(s_client_sock, &c, 1, 0);
             }
-            autoresume_kick();
         }
         // altri caratteri: ignora
     }
 
-    ESP_LOGI(TAG, "Sessione chiusa");
+    ESP_LOGI(TAG, "Sessione telnet chiusa");
     close_client();
     s_session_task = nullptr;
     vTaskDelete(NULL);
@@ -198,12 +181,6 @@ static void listener_task(void* pv) {
     listen(s_listen_sock, 1);
     ESP_LOGI(TAG, "In ascolto su porta %d", port);
 
-    // timer auto-resume condiviso da questa sessione
-    if (!s_resume_timer) {
-        s_resume_timer = xTimerCreate("tn_autoresume", pdMS_TO_TICKS(TELNET_AUTORESTORE_MS),
-                                      pdFALSE, nullptr, on_resume_timer);
-    }
-
     while (s_running) {
         struct sockaddr_storage src_addr;
         socklen_t addr_len = sizeof(src_addr);
@@ -228,19 +205,14 @@ static void listener_task(void* pv) {
             session_task, "telnet_session",
             TELNET_STACK, nullptr,
             TELNET_PRIO, &s_session_task,
-        0 /* core 0 */
+            0 /* core 0 */
         );
-
     }
 
     if (s_listen_sock >= 0) {
         shutdown(s_listen_sock, SHUT_RDWR);
         close(s_listen_sock);
         s_listen_sock = -1;
-    }
-    if (s_resume_timer) {
-        xTimerDelete(s_resume_timer, 0);
-        s_resume_timer = nullptr;
     }
     s_listener_task = nullptr;
     vTaskDelete(NULL);
@@ -250,11 +222,11 @@ void telnet_start(int port) {
     if (s_listener_task) return;
     s_running = true;
     xTaskCreatePinnedToCore(
-    listener_task, "telnet_listen",
-    TELNET_STACK, (void*)(intptr_t)port,
-    TELNET_PRIO, &s_listener_task,
-    0 /* core 0 */
-);
+        listener_task, "telnet_listen",
+        TELNET_STACK, (void*)(intptr_t)port,
+        TELNET_PRIO, &s_listener_task,
+        0 /* core 0 */
+    );
 }
 
 void telnet_stop(void) {
