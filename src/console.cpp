@@ -17,6 +17,7 @@
 #include "time_sync.h"
 
 #include "core1.h"
+#include "door.h"
 
 // ============================
 // Configurazione
@@ -240,6 +241,7 @@ static void print_help() {
     cli_puts("  ntp status      - stato sincronizzazione NTP\n");
     cli_puts("  memory          - stato dettagliato della memoria\n");
     cli_puts("  decod           - stato decoder RFID\n");
+    cli_puts("  door            - stato door task e sensori\n");
     
 }
 
@@ -393,6 +395,15 @@ static void exec_command(const char* line) {
         cli_printbuf(cli_unified_buffer);
         return;
     }
+
+    if (strncmp(cmd, "door", 4) == 0) {
+    const char* subcmd = (strlen(cmd) > 5) ? cmd + 5 : "";
+    
+    extern void get_door_status(char*, size_t, const char*);
+    get_door_status(cli_unified_buffer, sizeof(cli_unified_buffer), subcmd);
+    cli_printbuf(cli_unified_buffer);
+    return;
+}
     // Comando sconosciuto
     cli_puts("ERR: comando sconosciuto. Digita 'help'\n");
 }

@@ -222,10 +222,11 @@
         <div class="input-section">
             <div class="shortcuts">
                 <button class="shortcut-btn" data-cmd="help">help</button>
-                <button class="shortcut-btn" data-cmd="time">time</button>
+                <button class="shortcut-btn" data-cmd="door">door</button>
                 <button class="shortcut-btn" data-cmd="memory">memory</button>
                 <button class="shortcut-btn" data-cmd="log">log</button>
                 <button class="shortcut-btn" data-cmd="decod">decod</button>
+                <button class="shortcut-btn" data-cmd="time">time</button>
                 <button class="shortcut-btn" data-cmd="ntp status">ntp status</button>
                 <button class="shortcut-btn" data-cmd="ntp now">sync ntp</button>
                 <button class="shortcut-btn repeat-btn" id="repeatBtn">repeat</button>
@@ -319,6 +320,7 @@
                 this.elements.input.addEventListener('keydown', (e) => {
                     if (e.key === 'Enter') {
                         e.preventDefault();
+                        this.stopRepeat(); // Ferma il repeat prima di inviare il comando
                         this.sendCommand();
                     } else if (e.key === 'ArrowUp') {
                         e.preventDefault();
@@ -331,6 +333,7 @@
 
                 // Pulsante invio
                 this.elements.sendBtn.addEventListener('click', () => {
+                    this.stopRepeat(); // Ferma il repeat prima di inviare il comando
                     this.sendCommand();
                 });
 
@@ -339,6 +342,7 @@
                     btn.addEventListener('click', () => {
                         const cmd = btn.getAttribute('data-cmd');
                         if (cmd) {
+                            this.stopRepeat(); // Ferma il repeat prima di inviare il comando
                             this.elements.input.value = cmd;
                             this.sendCommand();
                         }
@@ -488,7 +492,7 @@
                     this.repeatInterval = setInterval(() => {
                         if (this.connected && this.lastCommand) {
                             // Invia comando senza modificare input o history
-                            this.log(`[REPEAT] > ${this.lastCommand}`, 'command');
+                            //this.log(`[REPEAT] > ${this.lastCommand}`, 'command');
                             this.ws.send(`cli:${this.lastCommand}`);
                         }
                     }, 1000);

@@ -4,4 +4,16 @@
 // Dichiarazione della funzione per l'inizializzazione del motore e dei sensori
 void setup_door();
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <stddef.h>
+void get_door_status(char* buffer, size_t buffer_size, const char* subcommand);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif // DOOR_H

@@ -29,6 +29,26 @@ static TickType_t temp_closed_start = 0; // Timestamp inizio chiusura temporanea
 static volatile uint64_t last_authorized_device_code = 0;
 static volatile uint16_t last_authorized_country_code = 0;
 
+// Variabili diagnostiche esposte (spostate dalla funzione door_task)
+static enum { IDLE, EVENTO_ATTIVO } stato_evento = IDLE;
+static char timestamp_inizio[20] = "";
+static time_t timestamp_inizio_time = 0;
+static uint32_t indice_inizio = 0;
+static bool passaggio_confermato = false;
+static const char* direzione = NULL;
+static uint32_t conteggio_senza_trigger = 0;
+static uint32_t ultimo_trigger_idx = 0;
+static int32_t trigger_porta_idx = -1;
+static int32_t passaggio_porta_idx = -1;
+static int32_t detect_idx = -1;
+static int32_t infrared_idx = -1;
+static char cat_name_evento[33] = "Sconosciuto";
+static uint16_t country_code_evento = 0;
+static uint64_t device_code_evento = 0;
+static bool authorized_evento = false;
+static bool codice_associato = false;
+static unsigned long last_unauthorized_log = 0;
+
 // =====================================
 // Encoder placeholder
 // =====================================
@@ -266,6 +286,88 @@ static void door_gpio_init_once(void) {
     ESP_ERROR_CHECK(gpio_config(&io));
 }
 
+// Funzione diagnostica per comando "door"
+extern "C" void get_door_status(char* buffer, size_t buffer_size, const char* subcommand) {
+    if (strlen(subcommand) == 0) {
+        time_t now;
+        time(&now);
+        struct tm *tm_now = localtime(&now);
+        char time_str[20];
+        strftime(time_str, sizeof(time_str), "%H:%M:%S", tm_now);
+        
+        const char* mode_str = (config.door_mode == AUTO) ? "AUTO" : 
+                              (config.door_mode == ALWAYS_OPEN) ? "ALWAYS_OPEN" : "ALWAYS_CLOSED";
+        
+        // Conversione corrected angle in gradi: 0=-180°, 2048=0°, 4095=+180°
+        float degrees = ((float)lastCorrectedAngle - 2048.0f) * 180.0f / 2048.0f;
+        
+        const char* stato_str = (stato_evento == IDLE) ? "IDLE" : "EVENTO_ATTIVO";
+        
+        // Calcolo timer
+        TickType_t now_ticks = xTaskGetTickCount();
+        uint32_t unauth_elapsed_sec = (now_ticks - last_unauthorized_log) / configTICK_RATE_HZ;
+        uint32_t door_elapsed_sec = door_open ? (now_ticks - door_timer_start) / configTICK_RATE_HZ : 0;
+        
+        char temp_timer_str[32] = "N/A";
+        if (temp_closed_active) {
+            uint32_t temp_elapsed_ms = (now_ticks - temp_closed_start) * portTICK_PERIOD_MS;
+            uint32_t temp_min = temp_elapsed_ms / 60000;
+            uint32_t temp_sec = (temp_elapsed_ms % 60000) / 1000;
+            snprintf(temp_timer_str, sizeof(temp_timer_str), "%lu:%02lu / %lu:00", temp_min, temp_sec, config.config_05);
+        }
+        
+        snprintf(buffer, buffer_size,
+            "=== STATO DOOR TASK ===\n"
+            "Timestamp: %s\n"
+            "\n"
+            "PORTA:\n"
+            "  Modalità: %s  |  Aperta: %s  |  Temp closed: %s\n"
+            "\n"
+            "ENCODER:\n"
+            "  Raw: %u  |  Corrected: %u (%.1f°)  |  Magnitude: %u\n"
+            "  Buffer index: %u  |  I2C: %s\n"
+            "\n"
+            "GPIO:\n"
+            "  Infrared: %s  |  Detect: %s  |  LED rosso: %s  |  LED blu: %s\n"
+            "\n"
+            "EVENTI:\n"
+            "  Stato: %s  |  Confermato: %s  |  Direzione: %s\n"
+            "  Codice assoc: %s  |  Nome: %s\n"
+            "  Indice inizio: %lu  |  Trigger: %ld  |  Detect: %ld  |  Infrared: %ld\n"
+            "  Senza trigger: %lu  |  Ultimo trigger: %lu\n"
+            "\n"
+            "TIMERS:\n"
+            "  Last unauth elapsed: %lu sec  |  Door open: %lu sec\n"
+            "  Temp closed: %s\n"
+            "  Last auth DC: %llu  |  CC: %u\n",
+            
+            time_str,
+            mode_str,
+            door_open ? "SÌ" : "NO",
+            temp_closed_active ? "SÌ" : "NO",
+            lastRawAngle, lastCorrectedAngle, degrees, lastMagnitude,
+            (unsigned)encoder_buffer_index, encoder_i2c_initialized ? "OK" : "ERR",
+            gpio_get_level(INFRARED) ? "ON" : "OFF",
+            gpio_get_level(DETECTED) ? "ON" : "OFF",
+            gpio_get_level(LED_ROSSO) ? "ON" : "OFF",
+            gpio_get_level(LED_BLU) ? "ON" : "OFF",
+            stato_str,
+            passaggio_confermato ? "SÌ" : "NO",
+            direzione ? direzione : "N/A",
+            codice_associato ? "SÌ" : "NO",
+            cat_name_evento,
+            indice_inizio, trigger_porta_idx, detect_idx, infrared_idx,
+            conteggio_senza_trigger, ultimo_trigger_idx,
+            unauth_elapsed_sec, door_elapsed_sec,
+            temp_timer_str,
+            (unsigned long long)last_authorized_device_code,
+            last_authorized_country_code
+        );
+    } else {
+        snprintf(buffer, buffer_size, "Subcomandi non implementati per 'door'");
+    }
+}
+
 // =====================================
 // Main door task
 // =====================================
@@ -299,7 +401,6 @@ extern "C" void door_task(void *pv) {
 
     char time_str[20];
     bool log_emitted = false;
-    unsigned long last_unauthorized_log = 0;
     DoorMode last_mode = AUTO;
     TickType_t last_wake_time = xTaskGetTickCount();
     const TickType_t interval = pdMS_TO_TICKS(100);
@@ -353,25 +454,6 @@ extern "C" void door_task(void *pv) {
     }
     last_mode = config.door_mode;
 
-    // Variabili statiche per l'analisi degli eventi
-    static enum { IDLE, EVENTO_ATTIVO } stato = IDLE;
-    static char timestamp_inizio[20] = "";
-    static time_t timestamp_inizio_time = 0;  // CORREZIONE: aggiungi variabile time_t
-    static uint32_t indice_inizio = 0;
-    static bool passaggio_confermato = false;
-    static const char* direzione = NULL;
-    static uint32_t conteggio_senza_trigger = 0;
-    static uint32_t ultimo_trigger_idx = 0;
-    static int32_t trigger_porta_idx = -1;
-    static int32_t passaggio_porta_idx = -1;
-    static int32_t detect_idx = -1;
-    static int32_t infrared_idx = -1;
-    static char cat_name_evento[33] = "Sconosciuto";
-    static uint16_t country_code_evento = 0;
-    static uint64_t device_code_evento = 0;
-    static bool authorized_evento = false;
-    static bool codice_associato = false;
-
     while (true) {
         // Variabili per il ciclo corrente
         char cat_name[33] = "Sconosciuto";
@@ -390,7 +472,7 @@ extern "C" void door_task(void *pv) {
         // Controllo cambio modalità 
         DoorMode current_mode = config.door_mode;
         if (current_mode != last_mode) {
-            // NUOVO: Resetta stato TEMP_CLOSED al cambio modalità
+            // NUOVO: Resetta stato TEMP_CLOSED al cambio modalità 
             if (temp_closed_active) {
                 temp_closed_active = false;
                 temp_closed_start = 0;
@@ -490,7 +572,7 @@ extern "C" void door_task(void *pv) {
             }
 
             // Gestione newcode durante evento attivo
-            if (stato == EVENTO_ATTIVO) {
+            if (stato_evento == EVENTO_ATTIVO) {
                 if (!codice_associato) {
                     codice_associato = true;
                     strncpy(cat_name_evento, cat_name, sizeof(cat_name_evento) - 1);
@@ -622,9 +704,9 @@ extern "C" void door_task(void *pv) {
         int32_t angolo_deviazione = abs((int32_t)correctedAngle - 2048);
         bool trigger = (angolo_deviazione > (int32_t)config.config_02 || infrared || detect);
 
-        if (stato == IDLE) {
+        if (stato_evento == IDLE) {
             if (trigger) {
-                stato = EVENTO_ATTIVO;
+                stato_evento = EVENTO_ATTIVO;
                 timestamp_inizio_time = now;  // CORREZIONE: salva il time_t
                 strncpy(timestamp_inizio, timestamp_full, sizeof(timestamp_inizio));
                 indice_inizio = 0;
@@ -653,7 +735,7 @@ extern "C" void door_task(void *pv) {
                 }
                 ESP_LOGD(TAG, "Evento iniziato a %s", timestamp_inizio);
             }
-        } else if (stato == EVENTO_ATTIVO) {
+        } else if (stato_evento == EVENTO_ATTIVO) {
             indice_inizio++;
             
             if (angolo_deviazione > (int32_t)config.config_03 && !passaggio_confermato) {
@@ -698,11 +780,11 @@ extern "C" void door_task(void *pv) {
                 add_log_entry(timestamp_inizio_time, tipo, cat_name_evento, country_code_evento, device_code_evento, authorized_evento);  // CORREZIONE: usa timestamp_inizio_time
                 ESP_LOGI(TAG, "Evento chiuso forzatamente per newcode, tipo: %s, Nome: %s, Durata: %.2f s", 
                          tipo, cat_name_evento, durata_effettiva);
-                stato = IDLE;
+                stato_evento = IDLE;
                 codice_associato = false;
                 // Reinizializza per nuovo evento se trigger ancora attivo
                 if (trigger) {
-                    stato = EVENTO_ATTIVO;
+                    stato_evento = EVENTO_ATTIVO;
                     timestamp_inizio_time = now;  // CORREZIONE: salva il time_t
                     strncpy(timestamp_inizio, timestamp_full, sizeof(timestamp_inizio));
                     indice_inizio = 0;
@@ -737,7 +819,7 @@ extern "C" void door_task(void *pv) {
                 add_log_entry(timestamp_inizio_time, tipo, cat_name_evento, country_code_evento, device_code_evento, authorized_evento);  // CORREZIONE: usa timestamp_inizio_time
                 ESP_LOGI(TAG, "Evento terminato, tipo: %s, Nome: %s, Durata: %.2f s", 
                          tipo, cat_name_evento, durata_effettiva);
-                stato = IDLE;
+                stato_evento = IDLE;
 
                 //0830   questo pezzo aggiundo copiato da Arduino
                 /*passaggio_confermato = false;

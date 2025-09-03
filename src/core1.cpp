@@ -405,7 +405,7 @@ extern "C" void get_decoder_status(char* buffer, size_t buffer_size, const char*
             "  dist[0]: %ld\n"
             "  datoadc: %u\n"
             "\n"
-            "Subcomandi: filt, corr, peaks, dist, adc",
+            "Subcomandi: filt, corr, peaks, dist, adc, all",
             
             last_periodic_log,
             (unsigned)i_interrupt,
@@ -429,11 +429,59 @@ extern "C" void get_decoder_status(char* buffer, size_t buffer_size, const char*
             dist[0],
             (unsigned)datoadc
         );
+    } else if (strcmp(subcommand, "filt") == 0) {
+        int len = snprintf(buffer, buffer_size, "=== BUFFER FILT (primi 25) ===\n");
+        for (int i = 0; i < 25 && i < CORR_BUFFER_SIZE && len < (int)buffer_size - 50; i++) {
+            len += snprintf(buffer + len, buffer_size - len, "filt[%2d]: %8ld\n", i, filt[i]);
+        }
+    } else if (strcmp(subcommand, "corr") == 0) {
+        int len = snprintf(buffer, buffer_size, "=== BUFFER CORR (primi 25) ===\n");
+        for (int i = 0; i < 25 && i < CORR_BUFFER_SIZE && len < (int)buffer_size - 50; i++) {
+            len += snprintf(buffer + len, buffer_size - len, "corr[%2d]: %8ld\n", i, corr[i]);
+        }
+    } else if (strcmp(subcommand, "peaks") == 0) {
+        int len = snprintf(buffer, buffer_size, "=== BUFFER PEAKS (primi 20) ===\n");
+        for (int i = 0; i < 20 && i < PEAKS_BUFFER_SIZE && len < (int)buffer_size - 50; i++) {
+            len += snprintf(buffer + len, buffer_size - len, "peaks[%2d]: %8ld\n", i, peaks[i]);
+        }
+    } else if (strcmp(subcommand, "dist") == 0) {
+        int len = snprintf(buffer, buffer_size, "=== BUFFER DIST (primi 20) ===\n");
+        for (int i = 0; i < 20 && i < DIST_BUFFER_SIZE && len < (int)buffer_size - 50; i++) {
+            len += snprintf(buffer + len, buffer_size - len, "dist[%2d]: %8ld\n", i, dist[i]);
+        }
+    } else if (strcmp(subcommand, "adc") == 0) {
+        int len = snprintf(buffer, buffer_size, "=== ULTIME 25 LETTURE ADC ===\n");
+        // Mostra le ultime 25 letture ADC (partendo da ia e andando indietro)
+        for (int i = 0; i < 25 && len < (int)buffer_size - 50; i++) {
+            uint32_t idx = (ia - i + ADC_BUFFER_SIZE) & 0x3FFF;
+            len += snprintf(buffer + len, buffer_size - len, "adc[-%2d]: %4u (idx:%lu)\n", 
+               i, adc_buffer[idx], (unsigned long)idx);
+        }
+    } else if (strcmp(subcommand, "all") == 0) {
+        int len = snprintf(buffer, buffer_size, "=== BUFFER CORRELATI (primi 20) ===\n");
+        len += snprintf(buffer + len, buffer_size - len, "  i  |   filt   |   corr   |  peaks   |   dist   |   adc\n");
+        len += snprintf(buffer + len, buffer_size - len, "-----|---------|----------|----------|----------|----------\n");
+        
+        for (int i = 0; i < 20 && len < (int)buffer_size - 80; i++) {
+            // ADC: ultime letture partendo da ia
+            uint32_t adc_idx = (ia - i + ADC_BUFFER_SIZE) & 0x3FFF;
+            uint16_t adc_val = (i < 25) ? adc_buffer[adc_idx] : 0;
+            
+            // Altri buffer: primi elementi se disponibili
+            int32_t filt_val = (i < CORR_BUFFER_SIZE) ? filt[i] : 0;
+            int32_t corr_val = (i < CORR_BUFFER_SIZE) ? corr[i] : 0;
+            int32_t peaks_val = (i < PEAKS_BUFFER_SIZE) ? peaks[i] : 0;
+            int32_t dist_val = (i < DIST_BUFFER_SIZE) ? dist[i] : 0;
+            
+            len += snprintf(buffer + len, buffer_size - len, 
+                        "%3d  | %8ld| %8ld | %8ld | %8ld | %8u\n",
+                        i, filt_val, corr_val, peaks_val, dist_val, adc_val);
+        }
+
     } else {
-        // Subcomandi futuri
         snprintf(buffer, buffer_size,
-            "Subcomando '%s' non ancora implementato.\n"
-            "Subcomandi disponibili (futuri): filt, corr, peaks, dist, adc",
+            "Subcomando '%s' non riconosciuto.\n"
+            "Subcomandi disponibili: filt, corr, peaks, dist, adc",
             subcommand
         );
     }
