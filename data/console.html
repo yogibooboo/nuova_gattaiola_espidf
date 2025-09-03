@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Console Diagnostica - ESP32</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Courier New', Consolas, monospace;
+            background: #1a1a1a;
+            color: #00ff00;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background: #333;
+            padding: 10px 20px;
+            border-bottom: 2px solid #00ff00;
+            text-align: center;
+            flex-shrink: 0;
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: bold;
+        }
+
+        .console-container {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .terminal-output {
+            flex: 1;
+            background: #000;
+            padding: 10px;
+            overflow-y: auto;
+            font-size: 14px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .input-section {
+            background: #222;
+            padding: 15px;
+            border-top: 1px solid #444;
+            flex-shrink: 0;
+        }
+
+        .shortcuts {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+
+        .shortcut-btn {
+            background: #444;
+            color: #00ff00;
+            border: 1px solid #666;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 3px;
+            font-family: inherit;
+            transition: background-color 0.2s;
+        }
+
+        .shortcut-btn:hover {
+            background: #555;
+        }
+
+        .repeat-btn {
+            background: #663300;
+            border-color: #ff6600;
+            transition: all 0.3s ease;
+        }
+
+        .repeat-btn:hover {
+            background: #884400;
+        }
+
+        .repeat-btn.active {
+            background: #cc4400;
+            color: white;
+            border-color: #ff6600;
+            box-shadow: 0 0 8px #ff6600;
+        }
+
+        .repeat-btn.active:hover {
+            background: #ee5500;
+        }
+
+        .command-input {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .prompt {
+            color: #00ff00;
+            font-weight: bold;
+        }
+
+        #commandInput {
+            flex: 1;
+            background: #000;
+            color: #00ff00;
+            border: 1px solid #444;
+            padding: 8px;
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+        }
+
+        #commandInput:focus {
+            border-color: #00ff00;
+        }
+
+        .send-btn {
+            background: #006600;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            cursor: pointer;
+            font-family: inherit;
+            border-radius: 3px;
+            transition: background-color 0.2s;
+        }
+
+        .send-btn:hover {
+            background: #008800;
+        }
+
+        .send-btn:disabled {
+            background: #333;
+            cursor: not-allowed;
+        }
+
+        /* Scrollbar personalizzata */
+        .terminal-output::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        .terminal-output::-webkit-scrollbar-track {
+            background: #222;
+        }
+
+        .terminal-output::-webkit-scrollbar-thumb {
+            background: #444;
+            border-radius: 4px;
+        }
+
+        .terminal-output::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header {
+                padding: 8px 15px;
+            }
+
+            .title {
+                font-size: 16px;
+            }
+
+            .terminal-output {
+                font-size: 13px;
+                padding: 8px;
+            }
+
+            .input-section {
+                padding: 10px;
+            }
+
+            .shortcuts {
+                gap: 5px;
+            }
+
+            .shortcut-btn {
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+        }
+
+        /* Animazione cursore per feedback visivo */
+        .cursor {
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0; }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="title">Console Diagnostica ESP32</div>
+    </div>
+
+    <div class="console-container">
+        <div class="terminal-output" id="terminalOutput">
+            <div>ESP32 Console Diagnostica v1.0</div>
+            <div>Connessione in corso...</div>
+            <div></div>
+        </div>
+
+        <div class="input-section">
+            <div class="shortcuts">
+                <button class="shortcut-btn" data-cmd="help">help</button>
+                <button class="shortcut-btn" data-cmd="time">time</button>
+                <button class="shortcut-btn" data-cmd="memory">memory</button>
+                <button class="shortcut-btn" data-cmd="log">log</button>
+                <button class="shortcut-btn" data-cmd="decod">decod</button>
+                <button class="shortcut-btn" data-cmd="ntp status">ntp status</button>
+                <button class="shortcut-btn" data-cmd="ntp now">sync ntp</button>
+                <button class="shortcut-btn repeat-btn" id="repeatBtn">repeat</button>
+            </div>
+            
+            <div class="command-input">
+                <span class="prompt">></span>
+                <input type="text" id="commandInput" placeholder="Inserisci comando..." autocomplete="off">
+                <button class="send-btn" id="sendBtn">Invia</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class ConsoleTerminal {
+            constructor() {
+                this.ws = null;
+                this.connected = false;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                this.commandHistory = [];
+                this.historyIndex = -1;
+                this.lastCommand = '';
+                this.repeatActive = false;
+                this.repeatInterval = null;
+                
+                this.elements = {
+                    output: document.getElementById('terminalOutput'),
+                    input: document.getElementById('commandInput'),
+                    sendBtn: document.getElementById('sendBtn')
+                };
+
+                this.init();
+            }
+
+            init() {
+                this.connect();
+                this.setupEventListeners();
+                this.elements.input.focus();
+            }
+
+            connect() {
+                try {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws`;
+                    
+                    this.ws = new WebSocket(wsUrl);
+                    this.setupWebSocketEvents();
+                    
+                    this.log('Tentativo di connessione...');
+                } catch (error) {
+                    this.log(`Errore connessione: ${error.message}`);
+                    this.scheduleReconnect();
+                }
+            }
+
+            setupWebSocketEvents() {
+                this.ws.onopen = () => {
+                    this.connected = true;
+                    this.reconnectAttempts = 0;
+                    this.log('Connesso al server ESP32');
+                    this.log('Digitare "help" per vedere i comandi disponibili');
+                    this.enableInput(true);
+                };
+
+                this.ws.onmessage = (event) => {
+                    const message = event.data;
+                    
+                    // Ignora messaggi di conferma CLI
+                    if (message === 'CLI_OK') return;
+                    
+                    // Gestisci altri messaggi (log, risposte)
+                    this.log(message);
+                };
+
+                this.ws.onclose = () => {
+                    this.connected = false;
+                    this.enableInput(false);
+                    this.stopRepeat(); // Ferma repeat se attivo
+                    this.log('Connessione chiusa');
+                    this.scheduleReconnect();
+                };
+
+                this.ws.onerror = (error) => {
+                    this.log(`Errore WebSocket: ${error.type}`);
+                };
+            }
+
+            setupEventListeners() {
+                // Invio comando con Enter
+                this.elements.input.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        this.sendCommand();
+                    } else if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        this.navigateHistory(-1);
+                    } else if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        this.navigateHistory(1);
+                    }
+                });
+
+                // Pulsante invio
+                this.elements.sendBtn.addEventListener('click', () => {
+                    this.sendCommand();
+                });
+
+                // Pulsanti shortcut
+                document.querySelectorAll('.shortcut-btn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const cmd = btn.getAttribute('data-cmd');
+                        if (cmd) {
+                            this.elements.input.value = cmd;
+                            this.sendCommand();
+                        }
+                    });
+                });
+
+                // Pulsante repeat bistabile
+                document.getElementById('repeatBtn').addEventListener('click', () => {
+                    this.toggleRepeat();
+                });
+
+                // Focus automatico sull'input
+                document.addEventListener('click', (e) => {
+                    if (!e.target.matches('button, input')) {
+                        this.elements.input.focus();
+                    }
+                });
+            }
+
+            sendCommand() {
+                if (!this.connected) {
+                    this.log('Non connesso al server');
+                    return;
+                }
+
+                const command = this.elements.input.value.trim();
+                if (!command) return;
+
+                // Salva ultimo comando (escludo "repeat" stesso)
+                if (command !== 'repeat') {
+                    this.lastCommand = command;
+                }
+
+                // Aggiungi alla cronologia
+                this.commandHistory.unshift(command);
+                if (this.commandHistory.length > 50) {
+                    this.commandHistory.pop();
+                }
+                this.historyIndex = -1;
+
+                // Mostra comando inviato
+                this.log(`> ${command}`, 'command');
+
+                // Invia tramite WebSocket con prefisso cli:
+                this.ws.send(`cli:${command}`);
+
+                // Pulisci input
+                this.elements.input.value = '';
+            }
+
+            navigateHistory(direction) {
+                if (this.commandHistory.length === 0) return;
+
+                this.historyIndex += direction;
+                
+                if (this.historyIndex < 0) {
+                    this.historyIndex = -1;
+                    this.elements.input.value = '';
+                } else if (this.historyIndex >= this.commandHistory.length) {
+                    this.historyIndex = this.commandHistory.length - 1;
+                }
+
+                if (this.historyIndex >= 0) {
+                    this.elements.input.value = this.commandHistory[this.historyIndex];
+                }
+            }
+
+            log(message, type = 'info') {
+                const timestamp = new Date().toLocaleTimeString('it-IT');
+                const line = document.createElement('div');
+                
+                if (type === 'command') {
+                    line.style.color = '#ffff00';
+                } else if (type === 'error') {
+                    line.style.color = '#ff4444';
+                }
+                
+                // Aggiungi timestamp solo per messaggi importanti
+                if (type === 'command' || message.includes('ERR:') || message.includes('OK:')) {
+                    line.textContent = `[${timestamp}] ${message}`;
+                } else {
+                    line.textContent = message;
+                }
+
+                this.elements.output.appendChild(line);
+                
+                // Mantieni max 1000 righe
+                while (this.elements.output.children.length > 1000) {
+                    this.elements.output.removeChild(this.elements.output.firstChild);
+                }
+                
+                // Scroll automatico in fondo
+                this.elements.output.scrollTop = this.elements.output.scrollHeight;
+            }
+
+            enableInput(enabled) {
+                this.elements.input.disabled = !enabled;
+                this.elements.sendBtn.disabled = !enabled;
+                
+                document.querySelectorAll('.shortcut-btn').forEach(btn => {
+                    btn.disabled = !enabled;
+                });
+
+                if (enabled) {
+                    this.elements.input.focus();
+                }
+            }
+
+            scheduleReconnect() {
+                if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+                    this.log('Numero massimo di tentativi di riconnessione raggiunto');
+                    return;
+                }
+
+                this.reconnectAttempts++;
+                const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 10000);
+                
+                this.log(`Riconnessione tra ${Math.round(delay/1000)} secondi... (tentativo ${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
+                
+                setTimeout(() => {
+                    this.connect();
+                }, delay);
+            }
+
+            toggleRepeat() {
+                if (!this.lastCommand) {
+                    this.log('Nessun comando da ripetere - invia prima un comando');
+                    return;
+                }
+
+                const repeatBtn = document.getElementById('repeatBtn');
+                
+                if (this.repeatActive) {
+                    // Ferma repeat
+                    this.repeatActive = false;
+                    clearInterval(this.repeatInterval);
+                    this.repeatInterval = null;
+                    repeatBtn.classList.remove('active');
+                    this.log(`Repeat fermato per comando: ${this.lastCommand}`);
+                } else {
+                    // Avvia repeat
+                    this.repeatActive = true;
+                    repeatBtn.classList.add('active');
+                    this.log(`Repeat attivato per comando: ${this.lastCommand} (ogni 1 secondo)`);
+                    
+                    // Timer fisso a 1 secondo
+                    this.repeatInterval = setInterval(() => {
+                        if (this.connected && this.lastCommand) {
+                            // Invia comando senza modificare input o history
+                            this.log(`[REPEAT] > ${this.lastCommand}`, 'command');
+                            this.ws.send(`cli:${this.lastCommand}`);
+                        }
+                    }, 1000);
+                }
+            }
+
+            stopRepeat() {
+                if (this.repeatActive) {
+                    this.repeatActive = false;
+                    clearInterval(this.repeatInterval);
+                    this.repeatInterval = null;
+                    document.getElementById('repeatBtn').classList.remove('active');
+                }
+            }
+        }
+
+        // Inizializza il terminale quando la pagina è caricata
+        document.addEventListener('DOMContentLoaded', () => {
+            window.terminal = new ConsoleTerminal();
+        });
+    </script>
+</body>
+</html>

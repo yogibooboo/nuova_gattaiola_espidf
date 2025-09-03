@@ -19,6 +19,9 @@
 void start_webserver_if_not_running(void);
 void stop_webserver(void);
 
+// Dichiarazione funzione CLI (implementata in console.cpp)
+extern "C" void cli_exec_line(const char* line);
+
 static const char *TAG = "WIFI";
 
 // Buffer temporaneo statico per copia encoder (32KB)
@@ -28,6 +31,16 @@ static EXT_RAM_BSS_ATTR EncoderData temp_encoder_buffer[ENCODER_BUFFER_SIZE] __a
 #define MAX_WS_CLIENTS 4
 static int g_ws_client_fds[MAX_WS_CLIENTS];
 static int g_ws_client_count = 0;
+
+// Gestione client WebSocket per CLI diagnostico
+#define MAX_CLI_CLIENTS 2
+static int g_cli_client_fds[MAX_CLI_CLIENTS];
+static int g_cli_client_count = 0;
+
+// Buffer per cattura output CLI
+static char cli_output_buffer[2048];
+static size_t cli_output_pos = 0;
+static bool cli_output_capture = false;
 
 // Funzioni per gestione client WebSocket
 void register_ws_client(int fd) {
@@ -52,15 +65,67 @@ void unregister_ws_client(int fd) {
     }
 }
 
+// Funzioni per gestione client CLI
+void register_cli_client(int fd) {
+    if (g_cli_client_count < MAX_CLI_CLIENTS) {
+        g_cli_client_fds[g_cli_client_count] = fd;
+        g_cli_client_count++;
+        ESP_LOGI(TAG, "Client CLI registrato, totale: %d", g_cli_client_count);
+    }
+}
+
+void unregister_cli_client(int fd) {
+    for (int i = 0; i < g_cli_client_count; i++) {
+        if (g_cli_client_fds[i] == fd) {
+            // Sposta gli elementi rimanenti
+            for (int j = i; j < g_cli_client_count - 1; j++) {
+                g_cli_client_fds[j] = g_cli_client_fds[j + 1];
+            }
+            g_cli_client_count--;
+            ESP_LOGI(TAG, "Client CLI rimosso, totale: %d", g_cli_client_count);
+            break;
+        }
+    }
+}
+
+// Funzione per catturare output CLI - chiamata da console.cpp
+extern "C" void websocket_broadcast_to_cli(const char* data, size_t len) {
+    if (!cli_output_capture) return;
+    
+    // Aggiungi al buffer di cattura (con protezione overflow)
+    size_t available = sizeof(cli_output_buffer) - cli_output_pos - 1;
+    if (available > 0) {
+        size_t to_copy = (len < available) ? len : available;
+        memcpy(cli_output_buffer + cli_output_pos, data, to_copy);
+        cli_output_pos += to_copy;
+        cli_output_buffer[cli_output_pos] = '\0';
+    }
+}
+
+// Funzioni per gestione cattura output
+static void start_output_capture() {
+    cli_output_pos = 0;
+    cli_output_buffer[0] = '\0';
+    cli_output_capture = true;
+}
+
+static void stop_output_capture() {
+    cli_output_capture = false;
+}
+
+static const char* get_captured_output() {
+    return cli_output_buffer;
+}
+
 void broadcast_door_mode_change(DoorMode mode) {
     const char* mode_names[] = {"AUTO", "ALWAYS_OPEN", "ALWAYS_CLOSED"};
     char message[64];
     snprintf(message, sizeof(message), "door_mode:%s", mode_names[mode]);
     
     // Nota: in ESP-IDF non abbiamo accesso diretto ai fd dei client WebSocket
-    // Questa implementazione Ã¨ un placeholder - la logica di broadcast reale
-    // richiederebbe modifiche piÃ¹ profonde al sistema HTTP server
-    ESP_LOGI(TAG, "Broadcast modalitÃ  porta: %s (placeholder)", message);
+    // Questa implementazione è un placeholder - la logica di broadcast reale
+    // richiederebbe modifiche più profonde al sistema HTTP server
+    ESP_LOGI(TAG, "Broadcast modalità porta: %s (placeholder)", message);
 }
 
 void add_door_mode_log(DoorMode mode) {
@@ -73,13 +138,13 @@ void add_door_mode_log(DoorMode mode) {
     entry->country_code = 0;
     entry->authorized = (mode == ALWAYS_OPEN);
     
-    const char* mode_events[] = {"ModalitÃ  Automatica", "ModalitÃ  Sempre Aperto", "ModalitÃ  Sempre Chiuso"};
+    const char* mode_events[] = {"Modalità Automatica", "Modalità Sempre Aperto", "Modalità Sempre Chiuso"};
     strncpy(entry->event, mode_events[mode], sizeof(entry->event) - 1);
     entry->event[sizeof(entry->event) - 1] = '\0';
     
     log_count++;
     
-    ESP_LOGI(TAG, "Aggiunta entry log cambio modalitÃ : %s", mode_events[mode]);
+    ESP_LOGI(TAG, "Aggiunta entry log cambio modalità: %s", mode_events[mode]);
 }
 
 // =====================================
@@ -107,7 +172,9 @@ esp_err_t ws_handler(httpd_req_t *req) {
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WS recv (len) err: %s (0x%x)", esp_err_to_name(ret), ret);
         // Deregistra client in caso di errore
-        unregister_ws_client(httpd_req_to_sockfd(req));
+        int client_fd = httpd_req_to_sockfd(req);
+        unregister_ws_client(client_fd);
+        unregister_cli_client(client_fd);
         return ret;
     }
 
@@ -149,7 +216,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
         uint32_t current_index = i_interrupt;  // indice di scrittura "istantaneo"
         uint32_t start_index   = (current_index + ADC_BUFFER_SIZE - 10000) % ADC_BUFFER_SIZE;
 
-        // Copia con gestione wrap (nessuna sezione critica: Ã¨ diagnostica)
+        // Copia con gestione wrap (nessuna sezione critica: è diagnostica)
         if (start_index + 10000 <= ADC_BUFFER_SIZE) {
             memcpy(
             temp_buffer,
@@ -254,20 +321,20 @@ esp_err_t ws_handler(httpd_req_t *req) {
         return ret;
     }
 
-    // --- Gestione cambio modalitÃ  porta ---
+    // --- Gestione cambio modalità porta ---
     if (strncmp((const char*)wbuf, "set_door_mode:", 14) == 0) {
         const char* mode_str = (const char*)wbuf + 14;
         DoorMode old_mode = config.door_mode;
         DoorMode new_mode = old_mode;
         
-        // Parse della modalitÃ 
-        ESP_LOGI(TAG, "ModalitÃ  porta vecchia  %d letta %s", old_mode, mode_str);
+        // Parse della modalità 
+        ESP_LOGI(TAG, "Modalità porta vecchia  %d letta %s", old_mode, mode_str);
         if (strcmp(mode_str, "AUTO") == 0) new_mode = AUTO;
         else if (strcmp(mode_str, "ALWAYS_OPEN") == 0) new_mode = ALWAYS_OPEN;
         else if (strcmp(mode_str, "ALWAYS_CLOSED") == 0) new_mode = ALWAYS_CLOSED;
         else {
-            // ModalitÃ  non valida
-            const char* resp = "ModalitÃ  non valida";
+            // Modalità non valida
+            const char* resp = "Modalità non valida";
             httpd_ws_frame_t resp_pkt = {
                 .final = true,
                 .fragmented = false, 
@@ -287,7 +354,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
             
 
             
-            ESP_LOGI(TAG, "ModalitÃ  porta cambiata da %d a %d", old_mode, new_mode);
+            ESP_LOGI(TAG, "Modalità porta cambiata da %d a %d", old_mode, new_mode);
             
             // Broadcast a tutti i client
             broadcast_door_mode_change(new_mode);
@@ -303,6 +370,64 @@ esp_err_t ws_handler(httpd_req_t *req) {
             .len = strlen(resp)
         };
         ret = httpd_ws_send_frame(req, &resp_pkt);
+        
+        buf_put_ws_frame(wbuf);
+        return ret;
+    }
+
+    // --- Gestione comandi CLI con cattura output ---
+    if (strncmp((const char*)wbuf, "cli:", 4) == 0) {
+        const char* command = (const char*)wbuf + 4;
+        
+        // Registra il client per ricevere log (se non già registrato)
+        int client_fd = httpd_req_to_sockfd(req);
+        bool already_registered = false;
+        for (int i = 0; i < g_cli_client_count; i++) {
+            if (g_cli_client_fds[i] == client_fd) {
+                already_registered = true;
+                break;
+            }
+        }
+        if (!already_registered) {
+            register_cli_client(client_fd);
+        }
+        
+        ESP_LOGI(TAG, "Comando CLI ricevuto: %s", command);
+        
+        // Attiva cattura output
+        start_output_capture();
+        
+        // Esegui il comando - l'output verrà catturato nel buffer
+        cli_exec_line(command);
+        
+        // Ferma cattura e ottieni risultato
+        stop_output_capture();
+        const char* output = get_captured_output();
+        
+        ESP_LOGI(TAG, "Output catturato (%d char): %s", strlen(output), output);
+        
+        // Invia la risposta al client WebSocket
+        if (strlen(output) > 0) {
+            httpd_ws_frame_t resp_pkt = {
+                .final = true,
+                .fragmented = false, 
+                .type = HTTPD_WS_TYPE_TEXT,
+                .payload = (uint8_t*)output,
+                .len = strlen(output)
+            };
+            ret = httpd_ws_send_frame(req, &resp_pkt);
+        } else {
+            // Risposta vuota - invia conferma
+            const char* resp = "Comando eseguito (nessun output)";
+            httpd_ws_frame_t resp_pkt = {
+                .final = true,
+                .fragmented = false, 
+                .type = HTTPD_WS_TYPE_TEXT,
+                .payload = (uint8_t*)resp,
+                .len = strlen(resp)
+            };
+            ret = httpd_ws_send_frame(req, &resp_pkt);
+        }
         
         buf_put_ws_frame(wbuf);
         return ret;
@@ -336,13 +461,14 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         wifi_rssi = 0;
         // Reset contatore client WebSocket
         g_ws_client_count = 0;
+        g_cli_client_count = 0;
         ESP_LOGI(TAG, "Spegne LED Wi-Fi");
         gpio_set_level(WIFI_LED, LED_OFF);
         esp_wifi_connect();
         ESP_LOGW(TAG, "Connessione WiFi persa, riconnessione...");
         stop_webserver();
         telnet_stop();
-        time_sync_stop();  // opzionale; se lo lasci attivo fallirÃ  e riproverÃ 
+        time_sync_stop();  // opzionale; se lo lasci attivo fallirà e riproverà 
 
     } else if (event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
@@ -363,7 +489,7 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         // Avvio SNTP (time sync) all'ottenimento dell'IP
         time_sync_start();
 
-        // Avvia il webserver fuori dal callback (task dedicata), solo se non giÃ  avviato
+        // Avvia il webserver fuori dal callback (task dedicata), solo se non già avviato
         start_webserver_if_not_running();
     }
 }

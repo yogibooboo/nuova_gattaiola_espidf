@@ -56,4 +56,14 @@ void start_rfid_task(void);
 // ISR "storica" che fa il doppio push del campione
 void onTimer(void);
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void get_decoder_status(char* buffer, size_t buffer_size, const char* subcommand);
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif // CORE1_H

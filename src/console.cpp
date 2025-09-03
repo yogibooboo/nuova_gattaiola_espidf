@@ -10,10 +10,13 @@
 #include <freertos/task.h>
 #include <freertos/timers.h>
 #include "sdkconfig.h"
+#include <esp_system.h>
 
 #include <esp_log.h>
 #include <time.h>
 #include "time_sync.h"
+
+#include "core1.h"
 
 // ============================
 // Configurazione
@@ -40,7 +43,16 @@ static volatile bool s_logs_muted = false;
 static volatile log_level_t s_current_log_level = LOG_INFO;
 static TimerHandle_t s_resume_timer = nullptr;
 
-// Scrive sia su seriale che su telnet
+// Buffer ultimo log periodico (implementato in main.cpp, allocato in PSRAM)
+extern EXT_RAM_BSS_ATTR char last_periodic_log[512];
+
+// Buffer unificato in PSRAM per tutti gli output lunghi CLI
+static EXT_RAM_BSS_ATTR char cli_unified_buffer[2048];
+
+// Dichiarazione funzione WebSocket (implementata in wifi.cpp)
+extern "C" void websocket_broadcast_to_cli(const char* data, size_t len);
+
+// Scrive su seriale, telnet e WebSocket CLI
 static void write_both_interfaces(const char* data, size_t len) {
     // Seriale
     fwrite(data, 1, len, stdout);
@@ -58,6 +70,9 @@ static void write_both_interfaces(const char* data, size_t len) {
         }
         if (start < len) telnet_write_best_effort(data + start, len - start);
     }
+
+    // WebSocket CLI (invio diretto senza conversione CRLF)
+    websocket_broadcast_to_cli(data, len);
 }
 
 // Router principale per tutti i log ESP-IDF
@@ -162,15 +177,38 @@ static void cli_puts(const char* s) {
     cli_write(s, strlen(s)); 
 }
 
+// Funzione per output a chunk sicuro di buffer esistenti
+static void cli_printbuf(const char* buffer) {
+    if (!buffer) return;
+    
+    size_t len = strlen(buffer);
+    const size_t chunk_size = 200;
+    
+    for (size_t i = 0; i < len; i += chunk_size) {
+        size_t remaining = len - i;
+        size_t to_send = (remaining > chunk_size) ? chunk_size : remaining;
+        write_both_interfaces(buffer + i, to_send);
+        
+        // Pausa solo se ci sono altri chunk da inviare
+        if (remaining > chunk_size) {
+            vTaskDelay(pdMS_TO_TICKS(1));
+        }
+    }
+}
+
+// Versione modificata di cli_printf che usa il buffer unificato
 static void cli_printf(const char* fmt, ...) {
-    char b[256];
     va_list ap; 
     va_start(ap, fmt);
-    int n = vsnprintf(b, sizeof(b), fmt, ap);
+    int n = vsnprintf(cli_unified_buffer, sizeof(cli_unified_buffer), fmt, ap);
     va_end(ap);
+    
     if (n <= 0) return;
-    size_t len = (size_t)((n < (int)sizeof(b)) ? n : (int)sizeof(b));
-    cli_write(b, len);
+    
+    size_t len = (size_t)((n < (int)sizeof(cli_unified_buffer)) ? n : (int)sizeof(cli_unified_buffer));
+    
+    // Output a chunk per evitare stack overflow
+    cli_printbuf(cli_unified_buffer);
 }
 
 static void rtrim(char* s) {
@@ -195,12 +233,14 @@ static bool streq_ci(const char* a, const char* b) {
 static void print_help() {
     cli_puts("\nComandi disponibili:\n");
     cli_puts("  help            - mostra questo aiuto\n");
-    cli_puts("  log on          - riattiva i log\n");
+    cli_puts("  log             - mostra ultimo log periodico\n");
     cli_puts("  log level <0-4> - imposta livello log (0=ERROR, 1=WARN, 2=INFO, 3=DEBUG, 4=VERBOSE)\n");
     cli_puts("  time            - mostra ora corrente\n");
     cli_puts("  ntp now         - forza sincronizzazione NTP\n");
     cli_puts("  ntp status      - stato sincronizzazione NTP\n");
-    cli_puts("\nSuggerimento: premi INVIO a vuoto per mettere in pausa i log e scrivere comandi.\n\n");
+    cli_puts("  memory          - stato dettagliato della memoria\n");
+    cli_puts("  decod           - stato decoder RFID\n");
+    
 }
 
 static void exec_command(const char* line) {
@@ -216,10 +256,12 @@ static void exec_command(const char* line) {
         return;
     }
 
-    if (streq_ci(cmd, "log on")) {
-        cancel_resume_timer();
-        logs_resume();
-        cli_puts("OK: log riattivati\n");
+    if (streq_ci(cmd, "log")) {
+        if (last_periodic_log[0] != '\0') {
+            cli_printf("%s\n", last_periodic_log);
+        } else {
+            cli_puts("Nessun log periodico disponibile ancora\n");
+        }
         return;
     }
 
@@ -274,6 +316,83 @@ static void exec_command(const char* line) {
         return;
     }
 
+    if (streq_ci(cmd, "memory") || streq_ci(cmd, "mem")) {
+        cli_puts("=== STATO MEMORIA ESP32-S3 ===\n");
+        
+        // Heap generale (principalmente SRAM interna)
+        size_t free_heap = esp_get_free_heap_size();
+        size_t min_free_heap = esp_get_minimum_free_heap_size();
+        size_t total_heap = heap_caps_get_total_size(MALLOC_CAP_DEFAULT);
+        
+        cli_printf("HEAP PRINCIPALE (SRAM):\n");
+        cli_printf("  Libera: %u bytes (%.1f KB)\n", 
+                   (unsigned)free_heap, (float)free_heap / 1024.0f);
+        cli_printf("  Minimo storico: %u bytes (%.1f KB)\n", 
+                   (unsigned)min_free_heap, (float)min_free_heap / 1024.0f);
+        cli_printf("  Totale: %u bytes (%.1f KB)\n", 
+                   (unsigned)total_heap, (float)total_heap / 1024.0f);
+        cli_printf("  Utilizzata: %.1f%%\n\n", 
+                   (float)(total_heap - free_heap) * 100.0f / total_heap);
+
+        // PSRAM (SPIRAM)
+        size_t free_psram = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        size_t total_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+        
+        cli_printf("PSRAM (SPIRAM):\n");
+        cli_printf("  Libera: %u bytes (%.1f KB)\n", 
+                   (unsigned)free_psram, (float)free_psram / 1024.0f);
+        cli_printf("  Totale: %u bytes (%.1f KB)\n", 
+                   (unsigned)total_psram, (float)total_psram / 1024.0f);
+        cli_printf("  Utilizzata: %.1f%%\n\n", 
+                   (float)(total_psram - free_psram) * 100.0f / total_psram);
+
+        // Memoria per DMA (importante per Bluetooth)
+        size_t free_dma = heap_caps_get_free_size(MALLOC_CAP_DMA);
+        size_t total_dma = heap_caps_get_total_size(MALLOC_CAP_DMA);
+        
+        cli_printf("MEMORIA DMA-CAPABLE:\n");
+        cli_printf("  Libera: %u bytes (%.1f KB)\n", 
+                   (unsigned)free_dma, (float)free_dma / 1024.0f);
+        cli_printf("  Totale: %u bytes (%.1f KB)\n", 
+                   (unsigned)total_dma, (float)total_dma / 1024.0f);
+        cli_printf("  Utilizzata: %.1f%%\n\n", 
+                   (float)(total_dma - free_dma) * 100.0f / total_dma);
+
+        // Memoria interna (SRAM) - esclude PSRAM
+        size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        size_t total_internal = heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+        
+        cli_printf("SRAM INTERNA PURA:\n");
+        cli_printf("  Libera: %u bytes (%.1f KB)\n", 
+                   (unsigned)free_internal, (float)free_internal / 1024.0f);
+        cli_printf("  Totale: %u bytes (%.1f KB)\n", 
+                   (unsigned)total_internal, (float)total_internal / 1024.0f);
+        cli_printf("  Utilizzata: %.1f%%\n\n", 
+                   (float)(total_internal - free_internal) * 100.0f / total_internal);
+
+        // Stack del task corrente
+        UBaseType_t stack_high_water = uxTaskGetStackHighWaterMark(NULL);
+        cli_printf("STACK TASK CORRENTE:\n");
+        cli_printf("  Stack libero minimo: %u bytes\n", 
+                   (unsigned)(stack_high_water * sizeof(StackType_t)));
+
+        // Informazioni aggiuntive
+        cli_printf("\nINFO AGGIUNTIVE:\n");
+        cli_printf("  Task totali: %u\n", (unsigned)uxTaskGetNumberOfTasks());
+        
+
+        
+        return;
+    }
+    
+    if (strncmp(cmd, "decod", 5) == 0) {
+        const char* subcmd = (strlen(cmd) > 6) ? cmd + 6 : "";
+        
+        // Usa il buffer unificato direttamente - zero copie
+        get_decoder_status(cli_unified_buffer, sizeof(cli_unified_buffer), subcmd);
+        cli_printbuf(cli_unified_buffer);
+        return;
+    }
     // Comando sconosciuto
     cli_puts("ERR: comando sconosciuto. Digita 'help'\n");
 }

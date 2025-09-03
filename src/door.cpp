@@ -21,6 +21,10 @@ static TickType_t door_timer_start = 0;
 static bool servo_inited = false;
 static volatile bool interruptFlag = false;
 
+// NUOVO: Variabili per gestione chiusura temporanea in ALWAYS_OPEN
+static bool temp_closed_active = false; // Stato TEMP_CLOSED per gatti non autorizzati
+static TickType_t temp_closed_start = 0; // Timestamp inizio chiusura temporanea
+
 // Variabili per tracking ultimo gatto autorizzato
 static volatile uint64_t last_authorized_device_code = 0;
 static volatile uint16_t last_authorized_country_code = 0;
@@ -116,7 +120,6 @@ static uint16_t encoder_readMagnitude(void) {
 
 // Aggiungi questa variabile globale dopo le altre variabili globali in door.cpp:
 static bool encoder_i2c_initialized = false;
-
 
 // =====================================
 // Interrupt handler per infrarossi
@@ -302,6 +305,9 @@ extern "C" void door_task(void *pv) {
     const TickType_t interval = pdMS_TO_TICKS(100);
     bool detect = false;
 
+    // NUOVO: Contatore per lampeggio LED rosso in TEMP_CLOSED (1 Hz, 5 cicli ON, 5 cicli OFF)
+    static uint32_t led_blink_counter = 0;
+
     // Stato iniziale coerente con config.door_mode
     switch (config.door_mode) {
         case ALWAYS_OPEN:
@@ -384,6 +390,14 @@ extern "C" void door_task(void *pv) {
         // Controllo cambio modalità 
         DoorMode current_mode = config.door_mode;
         if (current_mode != last_mode) {
+            // NUOVO: Resetta stato TEMP_CLOSED al cambio modalità
+            if (temp_closed_active) {
+                temp_closed_active = false;
+                temp_closed_start = 0;
+                led_blink_counter = 0;
+                gpio_set_level(LED_ROSSO, current_mode == ALWAYS_OPEN ? LED_ON : LED_OFF);
+                ESP_LOGI(TAG, "[%s] TEMP_CLOSED resettato per cambio modalità", time_str);
+            }
             if (current_mode == ALWAYS_OPEN) {
                 if (!door_open) {
                     gpio_set_level(LED_ROSSO, LED_ON);
@@ -415,6 +429,12 @@ extern "C" void door_task(void *pv) {
             last_mode = current_mode;
         }
 
+        // NUOVO: Gestione lampeggio LED rosso in TEMP_CLOSED (1 Hz, 500 ms ON, 500 ms OFF)
+        if (temp_closed_active) {
+            led_blink_counter = (led_blink_counter + 1) % 10; // 10 cicli = 1 secondo (100 ms * 10)
+            gpio_set_level(LED_ROSSO, (led_blink_counter < 5) ? LED_ON : LED_OFF);
+        }
+
         // Rilevamento RFID (usa le variabili condivise da core1)
         detect = false;
         bool newcode = false;
@@ -435,6 +455,37 @@ extern "C" void door_task(void *pv) {
                     is_authorized = config.authorized_cats[i].authorized;
                     country_code = config.authorized_cats[i].country_code;  //0830 superfluo
                     break;
+                }
+            }
+
+            // NUOVO: Gestione chiusura temporanea in ALWAYS_OPEN
+            if (current_mode == ALWAYS_OPEN && config.config_05 > 0) {
+                if (!is_authorized) {
+                    // Gatto non autorizzato: chiudi la porta immediatamente
+                    if (!temp_closed_active || door_open) {
+                        door_open = false;
+                        setServoPosition(false);
+                        temp_closed_active = true;
+                        temp_closed_start = xTaskGetTickCount();
+                        led_blink_counter = 0; // Inizia lampeggio
+                        add_log_entry(now, "Chiusura non autorizzato", cat_name, country_code, device_code, false);
+                        ESP_LOGI(TAG, "[%s] Porta chiusa per gatto non autorizzato: %s", time_str, cat_name);
+                    } else {
+                        // Reinizializza il timer per nuovo codice non autorizzato
+                        temp_closed_start = xTaskGetTickCount();
+                        add_log_entry(now, "Chiusura prolungata non auth", cat_name, country_code, device_code, false);
+                        ESP_LOGI(TAG, "[%s] Timeout chiusura prolungato per gatto non autorizzato: %s", time_str, cat_name);
+                    }
+                } else if (temp_closed_active) {
+                    // Gatto autorizzato: riapri immediatamente
+                    door_open = true;
+                    temp_closed_active = false;
+                    temp_closed_start = 0;
+                    led_blink_counter = 0;
+                    gpio_set_level(LED_ROSSO, LED_ON); // LED fisso per ALWAYS_OPEN
+                    setServoPosition(true);
+                    add_log_entry(now, "Riapertura autorizzato", cat_name, country_code, device_code, true);
+                    ESP_LOGI(TAG, "[%s] Porta riaperta per gatto autorizzato: %s", time_str, cat_name);
                 }
             }
 
@@ -489,6 +540,23 @@ extern "C" void door_task(void *pv) {
         } else {
             gpio_set_level(DETECTED, LED_OFF);
             
+            // NUOVO: Controllo timeout TEMP_CLOSED
+            if (temp_closed_active && config.config_05 > 0) {
+                TickType_t now_ticks = xTaskGetTickCount();
+                if ((now_ticks - temp_closed_start) >= pdMS_TO_TICKS(config.config_05 * 60000)) {
+                    temp_closed_active = false;
+                    temp_closed_start = 0;
+                    led_blink_counter = 0;
+                    if (current_mode == ALWAYS_OPEN) {
+                        door_open = true;
+                        setServoPosition(true);
+                        gpio_set_level(LED_ROSSO, LED_ON); // LED fisso per ALWAYS_OPEN
+                        add_log_entry(now, "Riapertura timeout", "Timeout TEMP_CLOSED", 0, 0, true);
+                        ESP_LOGI(TAG, "[%s] Porta riaperta dopo timeout TEMP_CLOSED (%u min)", time_str, config.config_05);
+                    }
+                }
+            }
+
             // Controllo pulsante manuale
             if (!gpio_get_level(PULSANTE_BLU) && !door_open && current_mode == AUTO) {
                 gpio_set_level(LED_ROSSO, LED_ON);
@@ -524,7 +592,7 @@ extern "C" void door_task(void *pv) {
         // LED blu per infrarosso
         gpio_set_level(LED_BLU, infrared ? LED_ON : LED_OFF);
 
-         if (rawAngle == 0xFFFF) {
+        if (rawAngle == 0xFFFF) {
             rawAngle = 0x3FFF; // Gestione errore
         }
 
@@ -549,8 +617,6 @@ extern "C" void door_task(void *pv) {
                 correctedAngle = 2048;
             }
         }
-
-        
 
         // ANALISI EVENTI (logica Arduino identica)
         int32_t angolo_deviazione = abs((int32_t)correctedAngle - 2048);

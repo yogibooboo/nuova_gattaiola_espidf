@@ -1,4 +1,4 @@
-// core1.cpp — versione corretta con calibrazione ADC
+// core1.cpp â€" versione corretta con calibrazione ADC
 #include "core1.h"
 #include "comune.h"
 #include <string.h>
@@ -47,6 +47,26 @@ volatile uint32_t last_sync_i = 0;
 //volatile TickType_t door_timer_start = 0;
 volatile uint32_t display_sync_count = 0;
 volatile uint16_t datoadc = 0;
+
+// ================== Variabili diagnostiche (esposte da media_correlazione_32) ==================
+static bool decoder_initialized = false;
+static int32_t debug_max_i = 0;
+static int32_t debug_min_i = 0;
+static int32_t debug_max_i8 = 0;
+static int32_t debug_min_i8 = 0;
+static int32_t debug_min_i_iniziale = 0;
+static int32_t debug_max_i_iniziale = 0;
+static int32_t debug_stato = 1;
+static int32_t debug_stato_decodifica = 0;
+static int32_t debug_contatore_zeri = 0;
+static int32_t debug_contatore_bytes = 0;
+static int32_t debug_contatore_bits = 0;
+static int32_t debug_stato_decobytes = 0;
+static int32_t debug_ultima_distanza = 0;
+static int32_t debug_newbit = 0;
+static int32_t debug_numbit = 0;
+static bool debug_newpeak = false;
+static uint8_t debug_confro = 0;
 
 // *** VARIABILI GLOBALI SEMPLIFICATE ***
 // *** CALIBRAZIONE ADC RIMOSSA PER TEST ***
@@ -163,23 +183,16 @@ static bool IRAM_ATTR pcnt_watch_callback(pcnt_unit_handle_t unit, const pcnt_wa
 // ====== Analisi (identica alla tua) ======
 static void media_correlazione_32() {
     // [Il tuo codice di analisi rimane identico]
-    static bool initialized = false;
-    static int32_t max_i=0,min_i=0,max_i8=0,min_i8=0,min_i_iniziale=0,max_i_iniziale=0;
-    static int32_t stato=1;
-    static int32_t stato_decodifica=0,contatore_zeri=0,contatore_bytes=0,contatore_bits=0,stato_decobytes=0;
-    static int32_t ultima_distanza=0,newbit=0,numbit=0;
-    static bool newpeak=false;
-    static uint8_t confro=0;
 
-    if (!initialized) {
+    if (!decoder_initialized) {
         num_picchi = num_distanze = num_bits = 0;
         for (int j=0;j<10;j++) bytes[j]=0;
         for (int j=0;j<CORR_BUFFER_SIZE;j++){ filt[j]=0; corr[j]=0; peaks[j]=0; dist[j]=0;}
-        initialized = true;
+        decoder_initialized = true;
     }
 
     ia = 32;
-    vTaskDelay(10 / portTICK_PERIOD_MS);     //assicura che inizialmente ci siano un pò di campioni
+    vTaskDelay(10 / portTICK_PERIOD_MS);     //assicura che inizialmente ci siano un pÃ² di campioni
 
     while (true) {
         available_samples = (int32_t)(i_interrupt - ia);
@@ -202,7 +215,7 @@ static void media_correlazione_32() {
             }
             filt[ia & 255] = sum;
 
-            // “Correlazione” 
+            // â€œCorrelazioneâ€ 
             int32_t sum_corr = 0;
             for(int j = 0; j < 16; j++) {
                 sum_corr += filt[(ia-31+j) & 0xFF];  // Primi 16: somma
@@ -212,105 +225,105 @@ static void media_correlazione_32() {
 
             gpio_set_level(SCOPE_1, 0);
 
-            newbit = 2; numbit = 0; newpeak = false;
+            debug_newbit = 2; debug_numbit = 0; debug_newpeak = false;
 
             // Peak picking alternato
-            if (stato == 1) {
-                max_i  = imax(corr[(ia-16) & (CORR_BUFFER_SIZE - 1)], max_i);
-                max_i8 = imax(corr[(ia-24) & (CORR_BUFFER_SIZE - 1)], max_i8);
-                if ((max_i == max_i8) && (max_i != max_i_iniziale)) {
+            if (debug_stato == 1) {
+                debug_max_i  = imax(corr[(ia-16) & (CORR_BUFFER_SIZE - 1)], debug_max_i);
+                debug_max_i8 = imax(corr[(ia-24) & (CORR_BUFFER_SIZE - 1)], debug_max_i8);
+                if ((debug_max_i == debug_max_i8) && (debug_max_i != debug_max_i_iniziale)) {
                     peaks[num_picchi & 0xFF] = (int32_t)ia - 24;
                     num_picchi++;
-                    stato = -1;
-                    min_i = corr[(ia-16) & (CORR_BUFFER_SIZE - 1)];
-                    min_i8 = corr[(ia-24) & (CORR_BUFFER_SIZE - 1)];
-                    min_i_iniziale = min_i8;
-                    newpeak = true;
+                    debug_stato = -1;
+                    debug_min_i = corr[(ia-16) & (CORR_BUFFER_SIZE - 1)];
+                    debug_min_i8 = corr[(ia-24) & (CORR_BUFFER_SIZE - 1)];
+                    debug_min_i_iniziale = debug_min_i8;
+                    debug_newpeak = true;
                 }
             } else {
-                min_i  = imin(corr[(ia-16) & (CORR_BUFFER_SIZE - 1)], min_i);
-                min_i8 = imin(corr[(ia-24) & (CORR_BUFFER_SIZE - 1)], min_i8);
-                if ((min_i == min_i8) && (min_i != min_i_iniziale)) {
+                debug_min_i  = imin(corr[(ia-16) & (CORR_BUFFER_SIZE - 1)], debug_min_i);
+                debug_min_i8 = imin(corr[(ia-24) & (CORR_BUFFER_SIZE - 1)], debug_min_i8);
+                if ((debug_min_i == debug_min_i8) && (debug_min_i != debug_min_i_iniziale)) {
                     peaks[num_picchi & 0xFF] = (int32_t)ia - 24;
                     num_picchi++;
-                    stato = 1;
-                    max_i = corr[(ia-16) & (CORR_BUFFER_SIZE - 1)];
-                    max_i8 = corr[(ia-24) & (CORR_BUFFER_SIZE - 1)];
-                    max_i_iniziale = max_i8;
-                    newpeak = true;
+                    debug_stato = 1;
+                    debug_max_i = corr[(ia-16) & (CORR_BUFFER_SIZE - 1)];
+                    debug_max_i8 = corr[(ia-24) & (CORR_BUFFER_SIZE - 1)];
+                    debug_max_i_iniziale = debug_max_i8;
+                    debug_newpeak = true;
                 }
             }
 
             // Distanze/bit
-            if (newpeak) {    //tolto  if (num_picchi > 1 && newpeak) { che bloccava in overflow negativo
-                ultima_distanza = peaks[(num_picchi - 1) & 0xFF] - peaks[(num_picchi - 2) & 0xFF];
-                dist[num_distanze & 0xFF] = ultima_distanza;
+            if (debug_newpeak) {    //tolto  if (num_picchi > 1 && newpeak) { che bloccava in overflow negativo
+                debug_ultima_distanza = peaks[(num_picchi - 1) & 0xFF] - peaks[(num_picchi - 2) & 0xFF];
+                dist[num_distanze & 0xFF] = debug_ultima_distanza;
                 num_distanze++;
 
-                if (stato_decodifica == 0) {
-                    if (ultima_distanza >= soglia_mezzo_bit) {
+                if (debug_stato_decodifica == 0) {
+                    if (debug_ultima_distanza >= soglia_mezzo_bit) {
                         bits[num_bits & 0xFF].value = 1;
                         bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
-                        num_bits++; newbit = 1; numbit = 1;
+                        num_bits++; debug_newbit = 1; debug_numbit = 1;
                     } else {
-                        stato_decodifica = 1;
+                        debug_stato_decodifica = 1;
                     }
-                } else if (stato_decodifica == 1) {
-                    confro = 42;
-                    if (bits[(num_bits - 1) & 0xFF].value == 1) confro = 48;
+                } else if (debug_stato_decodifica == 1) {
+                    debug_confro = 42;
+                    if (bits[(num_bits - 1) & 0xFF].value == 1) debug_confro = 48;
 
-                    if ((ultima_distanza + dist[(num_distanze - 2) & 0xFF]) >= confro) {
+                    if ((debug_ultima_distanza + dist[(num_distanze - 2) & 0xFF]) >= debug_confro) {
                         bits[num_bits & 0xFF].value = 1;
-                        bits[num_bits & 0xFF].pos   = (int32_t)ia - 24 - ultima_distanza;
-                        num_bits++; newbit = 1; numbit = 1;
-                        stato_decodifica = 2;
+                        bits[num_bits & 0xFF].pos   = (int32_t)ia - 24 - debug_ultima_distanza;
+                        num_bits++; debug_newbit = 1; debug_numbit = 1;
+                        debug_stato_decodifica = 2;
 
-                        if ((ultima_distanza + dist[(num_distanze - 2) & 0xFF]) >= 52) {
+                        if ((debug_ultima_distanza + dist[(num_distanze - 2) & 0xFF]) >= 52) {
                             bits[num_bits & 0xFF].value = 1;
                             bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
-                            num_bits++; newbit = 1; numbit = 2;
-                            stato_decodifica = 0;
+                            num_bits++; debug_newbit = 1; debug_numbit = 2;
+                            debug_stato_decodifica = 0;
                         }
                     } else {
                         bits[num_bits & 0xFF].value = 0;
                         bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
-                        num_bits++; newbit = 0; numbit = 1;
-                        stato_decodifica = 0;
+                        num_bits++; debug_newbit = 0; debug_numbit = 1;
+                        debug_stato_decodifica = 0;
                     }
-                } else if (stato_decodifica == 2) {
-                    stato_decodifica = 0;
+                } else if (debug_stato_decodifica == 2) {
+                    debug_stato_decodifica = 0;
                     bits[num_bits & 0xFF].value = 0;
                     bits[num_bits & 0xFF].pos   = (int32_t)ia - 24;
-                    num_bits++; newbit = 0; numbit = 1;
+                    num_bits++; debug_newbit = 0; debug_numbit = 1;
                 }
             }
 
             // Decodifica byte (identica)
-            while (numbit > 0) {
-                switch (stato_decobytes) {
+            while (debug_numbit > 0) {
+                switch (debug_stato_decobytes) {
                     case 0:
-                        if (newbit == 0) {
-                            contatore_zeri++;
-                        } else if (contatore_zeri == 10) {
-                            stato_decobytes = 1;
-                            contatore_bytes = contatore_bits = 0;
+                        if (debug_newbit == 0) {
+                            debug_contatore_zeri++;
+                        } else if (debug_contatore_zeri == 10) {
+                            debug_stato_decobytes = 1;
+                            debug_contatore_bytes = debug_contatore_bits = 0;
                             for (int j=0;j<10;j++) bytes[j]=0;
                             sync_count += 1;
                             last_sync_i = ia;
                         } else {
-                            contatore_zeri = 0;
+                            debug_contatore_zeri = 0;
                         }
                         break;
 
                     case 1:
-                        if (contatore_bits < 8) {
-                            bytes[contatore_bytes] >>= 1;
-                            if (newbit == 1) bytes[contatore_bytes] |= 0x80;
-                            contatore_bits++;
-                        } else if (newbit == 1) {
-                            contatore_bytes++;
-                            contatore_bits = 0;
-                            if (contatore_bytes >= 10) {
+                        if (debug_contatore_bits < 8) {
+                            bytes[debug_contatore_bytes] >>= 1;
+                            if (debug_newbit == 1) bytes[debug_contatore_bytes] |= 0x80;
+                            debug_contatore_bits++;
+                        } else if (debug_newbit == 1) {
+                            debug_contatore_bytes++;
+                            debug_contatore_bits = 0;
+                            if (debug_contatore_bytes >= 10) {
                                 uint16_t crc = 0x0;
                                 const uint16_t polynomial = 0x1021;
                                 for (int b=0; b<10; b++) {
@@ -338,16 +351,16 @@ static void media_correlazione_32() {
                                     door_sync_count += 1;
                                     display_sync_count += 1;
                                 }
-                                contatore_zeri = contatore_bytes = 0;
-                                stato_decobytes = 0;
+                                debug_contatore_zeri = debug_contatore_bytes = 0;
+                                debug_stato_decobytes = 0;
                             }
                         } else {
-                            contatore_zeri = contatore_bits = contatore_bytes = 0;
-                            stato_decobytes = 0;
+                            debug_contatore_zeri = debug_contatore_bits = debug_contatore_bytes = 0;
+                            debug_stato_decobytes = 0;
                         }
                         break;
                 }
-                numbit--;
+                debug_numbit--;
             }
         //} //if (ia >= 32) tolto
         
@@ -355,6 +368,76 @@ static void media_correlazione_32() {
     }
 }
 
+
+// Funzione diagnostica per comando "decod" - accede alle variabili statiche esposte
+extern "C" void get_decoder_status(char* buffer, size_t buffer_size, const char* subcommand) {
+    if (strlen(subcommand) == 0) {
+        // Buffer esterno per ultimo log periodico
+        extern EXT_RAM_BSS_ATTR char last_periodic_log[512];
+        
+        snprintf(buffer, buffer_size,
+            "=== STATO DECODER RFID ===\n"
+            "Log periodico: %s\n"
+            "\n"
+            "CONTATORI:\n"
+            "  i_interrupt: %u\n"
+            "  ia: %u\n"
+            "  available_samples: %d\n"
+            "\n"
+            "STATI DECODER:\n"
+            "  max_i: %ld\n"
+            "  max_i8: %ld\n" 
+            "  min_i: %ld\n"
+            "  min_i8: %ld\n"
+            "  stato_decodifica: %ld\n"
+            "  stato_decobytes: %ld\n"
+            "  contatore_bytes: %ld\n"
+            "  contatore_bits: %ld\n"
+            "  contatore_zeri: %ld\n"
+            "\n"
+            "BUFFER:\n"
+            "  num_picchi: %u\n"
+            "  num_distanze: %u\n"
+            "  num_bits: %u\n"
+            "  filt[0]: %ld\n"
+            "  corr[0]: %ld\n"
+            "  peaks[0]: %ld\n"
+            "  dist[0]: %ld\n"
+            "  datoadc: %u\n"
+            "\n"
+            "Subcomandi: filt, corr, peaks, dist, adc",
+            
+            last_periodic_log,
+            (unsigned)i_interrupt,
+            (unsigned)ia,
+            (int)available_samples,
+            debug_max_i,
+            debug_max_i8,
+            debug_min_i,
+            debug_min_i8,
+            debug_stato_decodifica,
+            debug_stato_decobytes,
+            debug_contatore_bytes,
+            debug_contatore_bits,
+            debug_contatore_zeri,
+            (unsigned)num_picchi,
+            (unsigned)num_distanze,
+            (unsigned)num_bits,
+            filt[0],
+            corr[0],
+            peaks[0],
+            dist[0],
+            (unsigned)datoadc
+        );
+    } else {
+        // Subcomandi futuri
+        snprintf(buffer, buffer_size,
+            "Subcomando '%s' non ancora implementato.\n"
+            "Subcomandi disponibili (futuri): filt, corr, peaks, dist, adc",
+            subcommand
+        );
+    }
+}
 // ===== Task su core 1 =====
 // === Task sul core 1: init ADC, aggancio IRQ su portante, poi analisi ===
 static void rfid_task(void *pvParameters)

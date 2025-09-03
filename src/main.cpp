@@ -30,6 +30,9 @@ extern "C" void door_task(void *pv);
 // Dichiarazioni per il logging unificato
 extern "C" void unified_log_raw(const char* fmt, ...);
 
+// Buffer per ultimo log periodico (accessibile da console.cpp)
+EXT_RAM_BSS_ATTR char last_periodic_log[512] = "";
+
 static const char* TAG = "MAIN_APP";
 static const char* TAG_RMT = "RMT134";
 
@@ -57,7 +60,7 @@ static const uint8_t fdx_b_sequence[128] = {
 static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)F134KHZ)
 {
     if (s_rmt_chan) {
-        ESP_LOGI(TAG_RMT, "Carrier giÃ  avviata");
+        ESP_LOGI(TAG_RMT, "Carrier già avviata");
         return ESP_OK;
     }
 
@@ -94,7 +97,7 @@ static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)F134KHZ)
     return ESP_OK;
 }
 
-// Ferma e rilascia le risorse (se/quando servirÃ )
+// Ferma e rilascia le risorse (se/quando servirà)
 static void pwm134_stop(void)
 {
     if (!s_rmt_chan) return;
@@ -214,10 +217,10 @@ void print_task(void *pvParameters) {
         uint8_t seq[10];
         for (int i = 0; i < 10; ++i) seq[i] = last_sequence[i];
 
-        // MODIFICA PRINCIPALE: Usa unified_log_raw invece di std::printf
-        unified_log_raw(
+        // Salva in buffer per comando "log" - PRIMA di stampare
+        snprintf(last_periodic_log, sizeof(last_periodic_log),
             "[%s] Sync: %u, OK: %u, Last Seq: [%02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X], "
-            "DC: %llu, CC: %u, diff: %u, freq: %u, a_s: %ld, lastADC: %u,Angle:%u/%u,mag:%u\n",
+            "DC: %llu, CC: %u, diff: %u, freq: %u, a_s: %ld, lastADC: %u,Angle:%u/%u,mag:%u",
             time_str,
             (unsigned)sync_count,
             (unsigned)display_sync_count,
@@ -232,6 +235,9 @@ void print_task(void *pvParameters) {
             lastCorrectedAngle, 
             lastMagnitude
         );
+
+        // Stampa usando il buffer salvato (aggiunge \n automaticamente)
+        unified_log_raw("%s\n", last_periodic_log);
 
         // Reset contatori "per stampa" come sul vecchio sketch
         sync_count = 0;

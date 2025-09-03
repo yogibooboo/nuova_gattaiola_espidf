@@ -84,7 +84,7 @@ typedef struct {
     uint32_t config_02; //Soglia porta trig:
     uint32_t config_03; //Soglia porta open:
     uint32_t config_04; //Door event durata:
-    uint32_t config_05;
+    uint32_t config_05; //durata in minuti chiusuraper codice non autorizzato
     uint32_t config_06;
     uint32_t config_07;
     uint32_t config_08;

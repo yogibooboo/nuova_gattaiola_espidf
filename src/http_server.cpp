@@ -213,11 +213,13 @@ static esp_err_t static_file_handler(httpd_req_t *req) {
 
     char filepath[520];
 
-    // Mappa "/" a "/index.html" e "/config" a "/config.html"
+    // Mappa "/" a "/index.html", "/config" a "/config.html" e "/console" a "/console.html"
     if (strcmp(uri, "/") == 0) {
         snprintf(filepath, sizeof(filepath), "/spiffs/index.html");
     } else if (strcmp(uri, "/config") == 0) {
         snprintf(filepath, sizeof(filepath), "/spiffs/config.html");
+    } else if (strcmp(uri, "/console") == 0) {
+        snprintf(filepath, sizeof(filepath), "/spiffs/console.html");
     } else if (strcmp(uri, "/update") == 0) {
         snprintf(filepath, sizeof(filepath), "/spiffs/update.html");
     } else {
@@ -609,6 +611,7 @@ static esp_err_t start_webserver(void) {
         {"/ws", HTTP_GET, ws_handler, NULL, true, true, NULL},
         {"/", HTTP_GET, static_file_handler, NULL, false, NULL, NULL},
         {"/config", HTTP_GET, static_file_handler, NULL, false, NULL, NULL},
+        {"/console", HTTP_GET, static_file_handler, NULL, false, NULL, NULL},
         {"/update", HTTP_GET, static_file_handler, NULL, false, NULL, NULL},
         {"/api/status", HTTP_GET, status_handler, NULL, false, NULL, NULL},
     };
