@@ -35,6 +35,8 @@ esp_err_t ws_handler(httpd_req_t *req);
 extern "C" {
 #endif
 
+void get_wifi_status(char* buffer, size_t buffer_size, const char* subcommand);
+
 // Funzioni C-compatible se necessario
 // (al momento tutte le funzioni sono già C++ compatible)
 

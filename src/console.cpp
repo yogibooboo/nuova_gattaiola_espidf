@@ -18,6 +18,8 @@
 
 #include "core1.h"
 #include "door.h"
+#include "wifi.h"
+
 
 // ============================
 // Configurazione
@@ -52,6 +54,9 @@ static EXT_RAM_BSS_ATTR char cli_unified_buffer[2048];
 
 // Dichiarazione funzione WebSocket (implementata in wifi.cpp)
 extern "C" void websocket_broadcast_to_cli(const char* data, size_t len);
+
+extern "C" void get_system_diagnostics(char* buffer, size_t buffer_size, const char* subcommand);
+
 
 // Scrive su seriale, telnet e WebSocket CLI
 static void write_both_interfaces(const char* data, size_t len) {
@@ -242,6 +247,12 @@ static void print_help() {
     cli_puts("  memory          - stato dettagliato della memoria\n");
     cli_puts("  decod           - stato decoder RFID\n");
     cli_puts("  door            - stato door task e sensori\n");
+    cli_puts("  wifi            - stato connessione WiFi\n");  
+    cli_puts("  wifi scan       - scan reti WiFi disponibili\n");  // 
+    cli_puts("  system          - diagnostiche avanzate sistema\n");
+    cli_puts("  system reset    - causa ultimo reset\n");
+    cli_puts("  system info     - informazioni chip e firmware\n");
+    cli_puts("  system task     - stato task FreeRTOS\n");
     
 }
 
@@ -289,9 +300,25 @@ static void exec_command(const char* line) {
         char buf[64];
         strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &lt);
 
+        // Calcola uptime dall'ultimo reset
+        TickType_t uptime_ticks = xTaskGetTickCount();
+        uint32_t uptime_ms = uptime_ticks * portTICK_PERIOD_MS;
+        uint32_t uptime_sec = uptime_ms / 1000;
+        uint32_t days = uptime_sec / (24 * 3600);
+        uint32_t hours = (uptime_sec % (24 * 3600)) / 3600;
+        uint32_t minutes = (uptime_sec % 3600) / 60;
+        uint32_t seconds = uptime_sec % 60;
+
         cli_printf("Ora locale: %s\n", buf);
         cli_printf("Epoch: %ld\n", (long)now);
         cli_printf("Valid sync: %s\n", time_sync_is_valid() ? "yes" : "no");
+        
+        if (days > 0) {
+            cli_printf("Uptime: %u giorni, %02u:%02u:%02u\n", days, hours, minutes, seconds);
+        } else {
+            cli_printf("Uptime: %02u:%02u:%02u\n", hours, minutes, seconds);
+        }
+        
         return;
     }
 
@@ -403,7 +430,23 @@ static void exec_command(const char* line) {
     get_door_status(cli_unified_buffer, sizeof(cli_unified_buffer), subcmd);
     cli_printbuf(cli_unified_buffer);
     return;
-}
+    }
+    
+    if (strncmp(cmd, "wifi", 4) == 0) {
+        const char* subcmd = (strlen(cmd) > 5) ? cmd + 5 : "";
+        
+        extern void get_wifi_status(char*, size_t, const char*);
+        get_wifi_status(cli_unified_buffer, sizeof(cli_unified_buffer), subcmd);
+        cli_printbuf(cli_unified_buffer);
+        return;
+    }
+        if (strncmp(cmd, "system", 6) == 0) {
+        const char* subcmd = (strlen(cmd) > 7) ? cmd + 7 : "";
+        
+        get_system_diagnostics(cli_unified_buffer, sizeof(cli_unified_buffer), subcmd);
+        cli_printbuf(cli_unified_buffer);
+        return;
+    }
     // Comando sconosciuto
     cli_puts("ERR: comando sconosciuto. Digita 'help'\n");
 }

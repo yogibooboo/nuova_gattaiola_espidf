@@ -37,7 +37,7 @@ static int g_ws_client_count = 0;
 static int g_cli_client_fds[MAX_CLI_CLIENTS];
 static int g_cli_client_count = 0;
 
-// Buffer per cattura output CLI
+// Buffer per cattura output CLI - RIPRISTINATO SISTEMA ORIGINALE
 static char cli_output_buffer[2048];
 static size_t cli_output_pos = 0;
 static bool cli_output_capture = false;
@@ -88,6 +88,7 @@ void unregister_cli_client(int fd) {
     }
 }
 
+// SISTEMA DI CATTURA ORIGINALE RIPRISTINATO
 // Funzione per catturare output CLI - chiamata da console.cpp
 extern "C" void websocket_broadcast_to_cli(const char* data, size_t len) {
     if (!cli_output_capture) return;
@@ -117,36 +118,6 @@ static const char* get_captured_output() {
     return cli_output_buffer;
 }
 
-void broadcast_door_mode_change(DoorMode mode) {
-    const char* mode_names[] = {"AUTO", "ALWAYS_OPEN", "ALWAYS_CLOSED"};
-    char message[64];
-    snprintf(message, sizeof(message), "door_mode:%s", mode_names[mode]);
-    
-    // Nota: in ESP-IDF non abbiamo accesso diretto ai fd dei client WebSocket
-    // Questa implementazione è un placeholder - la logica di broadcast reale
-    // richiederebbe modifiche più profonde al sistema HTTP server
-    ESP_LOGI(TAG, "Broadcast modalità porta: %s (placeholder)", message);
-}
-
-void add_door_mode_log(DoorMode mode) {
-    time_t now;
-    time(&now);
-    
-    LogEntry* entry = &log_buffer[log_count % LOG_BUFFER_SIZE];
-    entry->timestamp = now;
-    entry->device_code = 0;
-    entry->country_code = 0;
-    entry->authorized = (mode == ALWAYS_OPEN);
-    
-    const char* mode_events[] = {"Modalità Automatica", "Modalità Sempre Aperto", "Modalità Sempre Chiuso"};
-    strncpy(entry->event, mode_events[mode], sizeof(entry->event) - 1);
-    entry->event[sizeof(entry->event) - 1] = '\0';
-    
-    log_count++;
-    
-    ESP_LOGI(TAG, "Aggiunta entry log cambio modalità: %s", mode_events[mode]);
-}
-
 // =====================================
 // WebSocket handler
 // =====================================
@@ -154,7 +125,6 @@ void add_door_mode_log(DoorMode mode) {
 esp_err_t ws_handler(httpd_req_t *req) {
     if (req->method == HTTP_GET) {
         ESP_LOGI(TAG, "Handshake WebSocket completato");
-        // Registra il client per il broadcast (placeholder - non funzionale in ESP-IDF standard)
         register_ws_client(httpd_req_to_sockfd(req));
         return ESP_OK;
     }
@@ -262,7 +232,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
         uint32_t current_index = encoder_buffer_index;
         uint32_t start_index = (current_index - ENCODER_BUFFER_SIZE + ENCODER_BUFFER_SIZE) % ENCODER_BUFFER_SIZE;
         
-        ESP_LOGI(TAG, "Copia buffer: current_index=%u, start_index=%u", current_index, start_index);
+        ESP_LOGI(TAG, "Copia buffer: current_index=%lu, start_index=%lu", current_index, start_index);
         
         // Copia con gestione wrap
         if (start_index + ENCODER_BUFFER_SIZE <= ENCODER_BUFFER_SIZE) {
@@ -356,8 +326,8 @@ esp_err_t ws_handler(httpd_req_t *req) {
             
             ESP_LOGI(TAG, "Modalità porta cambiata da %d a %d", old_mode, new_mode);
             
-            // Broadcast a tutti i client
-            broadcast_door_mode_change(new_mode);
+            // Broadcast a tutti i client (placeholder)
+            ESP_LOGI(TAG, "Broadcast modalità porta: %d", new_mode);
         }
         
         // Risposta al client che ha fatto la richiesta
@@ -375,7 +345,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
         return ret;
     }
 
-    // --- Gestione comandi CLI con cattura output ---
+    // --- Gestione comandi CLI con cattura output - SISTEMA ORIGINALE ---
     if (strncmp((const char*)wbuf, "cli:", 4) == 0) {
         const char* command = (const char*)wbuf + 4;
         
@@ -449,8 +419,34 @@ esp_err_t ws_handler(httpd_req_t *req) {
 }
 
 // =====================================
-// Wi-Fi events & init
+// Wi-Fi events & init - Con funzioni di tracking diagnostico
 // =====================================
+
+// Variabili di tracking diagnostico WiFi (spostate qui da wifi_utils.cpp)
+static uint32_t wifi_reconnect_count = 0;
+static uint8_t last_disconnect_reason = WIFI_REASON_UNSPECIFIED;
+static time_t last_disconnect_time = 0;
+static time_t connection_start_time = 0;
+static uint32_t total_disconnect_count = 0;
+
+// Funzioni di tracking WiFi integrate
+static void wifi_track_connection_start(void) {
+    time(&connection_start_time);
+    ESP_LOGI(TAG, "Tracking: connessione iniziata");
+}
+
+static void wifi_track_disconnect(uint8_t reason) {
+    last_disconnect_reason = reason;
+    time(&last_disconnect_time);
+    total_disconnect_count++;
+    ESP_LOGI(TAG, "Tracking: disconnessione #%lu, motivo: %d", total_disconnect_count, reason);
+}
+
+static void wifi_track_reconnect(void) {
+    wifi_reconnect_count++;
+    wifi_track_connection_start();
+    ESP_LOGI(TAG, "Tracking: riconnessione #%lu", wifi_reconnect_count);
+}
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
@@ -464,8 +460,17 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         g_cli_client_count = 0;
         ESP_LOGI(TAG, "Spegne LED Wi-Fi");
         gpio_set_level(WIFI_LED, LED_OFF);
+        
+        // Track disconnessione
+        wifi_event_sta_disconnected_t* disconnected = (wifi_event_sta_disconnected_t*) event_data;
+        wifi_track_disconnect(disconnected->reason);
+        
         esp_wifi_connect();
         ESP_LOGW(TAG, "Connessione WiFi persa, riconnessione...");
+        
+        // Track tentativo riconnessione
+        wifi_track_reconnect();
+        
         stop_webserver();
         telnet_stop();
         time_sync_stop();  // opzionale; se lo lasci attivo fallirà e riproverà 
@@ -474,6 +479,10 @@ static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t e
         ip_event_got_ip_t* event = (ip_event_got_ip_t*) event_data;
         ESP_LOGI(TAG, "Connesso! IP: " IPSTR, IP2STR(&event->ip_info.ip));
         wifi_connected = true;
+        
+        // Track connessione stabilita
+        wifi_track_connection_start();
+        
         telnet_start(2323);   // porta di default
         wifi_ap_record_t ap_info;
         if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
@@ -536,6 +545,193 @@ void setup_wifi(void) {
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
+    connection_start_time = 0;
+    last_disconnect_time = 0;
+    total_disconnect_count = 0;
+    wifi_reconnect_count = 0;
 
     ESP_LOGI(TAG, "Inizializzazione WiFi completata");
+}
+
+// wifi_utils.cpp - File incluso in wifi.cpp
+// Contiene solo la diagnostica WiFi, il resto è stato spostato nel main
+
+// =====================================
+// Diagnostica WiFi completa
+// =====================================
+extern "C" void get_wifi_status(char* buffer, size_t buffer_size, const char* subcommand) {
+    if (strlen(subcommand) == 0) {
+        time_t now;
+        time(&now);
+        struct tm *tm_now = localtime(&now);
+        char time_str[20];
+        strftime(time_str, sizeof(time_str), "%H:%M:%S", tm_now);
+        
+        // Informazioni base di configurazione
+        char mac_str[18] = "N/A";
+        uint8_t mac[6];
+        if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK) {
+            snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        }
+        
+        // Stato connessione e qualità segnale
+        const char* status_str = wifi_connected ? "CONNECTED" : "DISCONNECTED";
+        int8_t current_rssi = wifi_rssi;
+        
+        // Aggiorna RSSI se connesso
+        if (wifi_connected) {
+            wifi_ap_record_t ap_info;
+            if (esp_wifi_sta_get_ap_info(&ap_info) == ESP_OK) {
+                current_rssi = ap_info.rssi;
+            }
+        }
+        
+        // Conversione RSSI in percentuale e "barre"
+        int rssi_percent = 0;
+        int rssi_bars = 0;
+        if (current_rssi >= -30) { rssi_percent = 100; rssi_bars = 4; }
+        else if (current_rssi >= -50) { rssi_percent = 75; rssi_bars = 3; }
+        else if (current_rssi >= -70) { rssi_percent = 50; rssi_bars = 2; }
+        else if (current_rssi >= -90) { rssi_percent = 25; rssi_bars = 1; }
+        
+        // Informazioni IP
+        char ip_str[16] = "N/A", gw_str[16] = "N/A", mask_str[16] = "N/A";
+        esp_netif_t* netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (netif) {
+            esp_netif_ip_info_t ip_info;
+            if (esp_netif_get_ip_info(netif, &ip_info) == ESP_OK) {
+                snprintf(ip_str, sizeof(ip_str), IPSTR, IP2STR(&ip_info.ip));
+                snprintf(gw_str, sizeof(gw_str), IPSTR, IP2STR(&ip_info.gw));
+                snprintf(mask_str, sizeof(mask_str), IPSTR, IP2STR(&ip_info.netmask));
+            }
+        }
+        
+        // Durata connessione
+       // Durata connessione - CON CONTROLLI DI VALIDITÀ
+        char connection_duration[32] = "N/A";
+        if (wifi_connected && connection_start_time > 0) {
+            // Controllo specifico: se connection_start_time è troppo vecchio (pre-2020),
+            // significa che è stato impostato prima della sincronizzazione NTP
+            if (connection_start_time < 1577836800) { // 1 gennaio 2020
+                snprintf(connection_duration, sizeof(connection_duration), "In attesa sync NTP");
+            } else {
+                time_t time_diff = now - connection_start_time;
+                
+                if (time_diff < 0 || time_diff > (7 * 24 * 3600)) {
+                    snprintf(connection_duration, sizeof(connection_duration), "ERRORE_TEMPO");
+                } else {
+                    uint32_t duration_sec = (uint32_t)time_diff;
+                    uint32_t days = duration_sec / (24 * 3600);
+                    uint32_t hours = (duration_sec % (24 * 3600)) / 3600;
+                    uint32_t minutes = (duration_sec % 3600) / 60;
+                    uint32_t seconds = duration_sec % 60;
+                    
+                    if (days > 0) {
+                        snprintf(connection_duration, sizeof(connection_duration), 
+                                "%lud %02lu:%02lu:%02lu", 
+                                (unsigned long)days, (unsigned long)hours, 
+                                (unsigned long)minutes, (unsigned long)seconds);
+                    } else {
+                        snprintf(connection_duration, sizeof(connection_duration), 
+                                "%02lu:%02lu:%02lu", 
+                                (unsigned long)hours, (unsigned long)minutes, 
+                                (unsigned long)seconds);
+                    }
+                }
+            }
+        }
+        
+        // Modalità power saving
+        wifi_ps_type_t ps_type;
+        const char* ps_str = "N/A";
+        if (esp_wifi_get_ps(&ps_type) == ESP_OK) {
+            switch (ps_type) {
+                case WIFI_PS_NONE: ps_str = "NONE"; break;
+                case WIFI_PS_MIN_MODEM: ps_str = "MIN_MODEM"; break;
+                case WIFI_PS_MAX_MODEM: ps_str = "MAX_MODEM"; break;
+                default: ps_str = "UNKNOWN"; break;
+            }
+        }
+        
+        // Motivo ultima disconnessione
+        const char* disconnect_reason = "N/A";
+        char disconnect_time_str[20] = "N/A";
+        if (last_disconnect_time > 0) {
+            struct tm *tm_disc = localtime(&last_disconnect_time);
+            strftime(disconnect_time_str, sizeof(disconnect_time_str), "%H:%M:%S", tm_disc);
+            
+            // Traduzione motivi comuni
+            switch (last_disconnect_reason) {
+                case WIFI_REASON_UNSPECIFIED: disconnect_reason = "Non specificato"; break;
+                case WIFI_REASON_AUTH_EXPIRE: disconnect_reason = "Auth scaduta"; break;
+                case WIFI_REASON_AUTH_LEAVE: disconnect_reason = "Auth terminata"; break;
+                case WIFI_REASON_ASSOC_EXPIRE: disconnect_reason = "Assoc scaduta"; break;
+                case WIFI_REASON_ASSOC_TOOMANY: disconnect_reason = "Troppe assoc"; break;
+                case WIFI_REASON_NOT_AUTHED: disconnect_reason = "Non autenticato"; break;
+                case WIFI_REASON_NOT_ASSOCED: disconnect_reason = "Non associato"; break;
+                case WIFI_REASON_ASSOC_LEAVE: disconnect_reason = "Assoc terminata"; break;
+                case WIFI_REASON_BEACON_TIMEOUT: disconnect_reason = "Beacon timeout"; break;
+                case WIFI_REASON_NO_AP_FOUND: disconnect_reason = "AP non trovato"; break;
+                case WIFI_REASON_AUTH_FAIL: disconnect_reason = "Auth fallita"; break;
+                case WIFI_REASON_ASSOC_FAIL: disconnect_reason = "Assoc fallita"; break;
+                case WIFI_REASON_HANDSHAKE_TIMEOUT: disconnect_reason = "Handshake timeout"; break;
+                default: disconnect_reason = "Altro"; break;
+            }
+        }
+        
+        snprintf(buffer, buffer_size,
+            "=== STATO WIFI ===\n"
+            "Timestamp: %s\n"
+            "\n"
+            "CONFIGURAZIONE:\n"
+            "  SSID: %s  |  MAC: %s\n"
+            "  Power saving: %s\n"
+            "\n" 
+            "CONNESSIONE:\n"
+            "  Stato: %s  |  Durata: %s\n"
+            "  IP: %s  |  Gateway: %s\n"
+            "  Netmask: %s\n"
+            "\n"
+            "SEGNALE:\n"
+            "  RSSI: %d dBm (%d%%, %d barre)\n"
+            "\n"
+            "STATISTICHE:\n"
+            "  Riconnessioni: %lu  |  Disconnessioni tot: %lu\n"
+            "\n"
+            "ULTIMA DISCONNESSIONE:\n"
+            "  Motivo: %s  |  Quando: %s\n"
+            "\n"
+            "WEBSOCKET:\n"
+            "  Client WS: %d  |  Client CLI: %d\n"
+            "\n"
+            "DEBUG TEMPI:\n"
+            "  Timestamp ora: %ld  |  Conn start: %ld\n",
+            
+            time_str,
+            WIFI_SSID, mac_str,
+            ps_str,
+            status_str, connection_duration,
+            ip_str, gw_str,
+            mask_str,
+            current_rssi, rssi_percent, rssi_bars,
+            (unsigned long)wifi_reconnect_count, (unsigned long)total_disconnect_count,
+            disconnect_reason, disconnect_time_str,
+            g_ws_client_count, g_cli_client_count,
+            (long)now, (long)connection_start_time  // DEBUG INFO
+        );
+    } else if (strcmp(subcommand, "scan") == 0) {
+        // Subcomando per scan reti
+        snprintf(buffer, buffer_size,
+            "=== SCAN RETI WIFI ===\n"
+            "Funzione scan non ancora implementata.\n"
+            "Richiede wifi_scan_start() asincrono."
+        );
+    } else {
+        snprintf(buffer, buffer_size,
+            "Subcomando '%s' non riconosciuto.\n"
+            "Subcomandi disponibili: scan",
+            subcommand
+        );
+    }
 }
