@@ -16,6 +16,13 @@ static const char *TAG = "DOOR";
 // =====================================
 EXT_RAM_BSS_ATTR EncoderData encoder_buffer[ENCODER_BUFFER_SIZE];
 volatile size_t encoder_buffer_index = 0;
+
+// BUFFER ESTESO - Allocazione dinamica in PSRAM
+EncoderDataExtended* encoder_buffer_extended = nullptr;
+volatile size_t encoder_buffer_extended_index = 0;
+volatile uint32_t encoder_buffer_extended_wraps = 0;
+volatile uint64_t encoder_buffer_extended_total_samples = 0;
+
 static volatile bool door_open = false;
 static TickType_t door_timer_start = 0;
 static bool servo_inited = false;
@@ -48,6 +55,42 @@ static uint64_t device_code_evento = 0;
 static bool authorized_evento = false;
 static bool codice_associato = false;
 static unsigned long last_unauthorized_log = 0;
+
+// Aggiungi questa variabile globale dopo le altre variabili globali in door.cpp:
+static bool encoder_i2c_initialized = false;
+
+// =====================================
+// Inizializzazione Buffer Esteso PSRAM
+// =====================================
+static esp_err_t init_extended_buffer(void) {
+    if (encoder_buffer_extended != nullptr) {
+        ESP_LOGI(TAG, "Buffer esteso già inizializzato");
+        return ESP_OK;
+    }
+    
+    size_t buffer_size = ENCODER_BUFFER_EXTENDED_SIZE * sizeof(EncoderDataExtended);
+    float buffer_mb = buffer_size / (1024.0f * 1024.0f);
+    
+    ESP_LOGI(TAG, "Tentativo allocazione buffer esteso: %.1f MB in PSRAM", buffer_mb);
+    
+    encoder_buffer_extended = (EncoderDataExtended*) heap_caps_malloc(
+        buffer_size, 
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT  // Stesso pattern del tuo BUFPSRAM
+    );
+    
+    if (encoder_buffer_extended == nullptr) {
+        ESP_LOGE(TAG, "ERRORE: Impossibile allocare %.1f MB in PSRAM", buffer_mb);
+        return ESP_ERR_NO_MEM;
+    }
+    
+    // Inizializza il buffer a zero
+    memset(encoder_buffer_extended, 0, buffer_size);
+    
+    ESP_LOGI(TAG, "Buffer esteso: %.1f MB allocati in PSRAM", buffer_mb);
+    ESP_LOGI(TAG, "Indirizzo buffer esteso: %p", encoder_buffer_extended);
+    
+    return ESP_OK;
+}
 
 // =====================================
 // Encoder placeholder
@@ -136,11 +179,6 @@ static uint16_t encoder_readMagnitude(void) {
     return magnitude;
 }
 
-// 3. AGGIUNGI variabile per I2C inizializzato e MODIFICA la funzione door_task():
-
-// Aggiungi questa variabile globale dopo le altre variabili globali in door.cpp:
-static bool encoder_i2c_initialized = false;
-
 // =====================================
 // Interrupt handler per infrarossi
 // =====================================
@@ -173,7 +211,7 @@ static void servo_init_once(void) {
         .timer_sel      = LEDC_TIMER_0,
         .duty           = 0,
         .hpoint         = 0,
-
+        .sleep_mode     = LEDC_SLEEP_MODE_KEEP_ALIVE,  // AGGIUNTO per warning
         .flags          = { .output_invert = 0 }
     };
     ESP_ERROR_CHECK(ledc_channel_config(&ccfg));
@@ -316,6 +354,9 @@ extern "C" void get_door_status(char* buffer, size_t buffer_size, const char* su
             snprintf(temp_timer_str, sizeof(temp_timer_str), "%lu:%02lu / %lu:00", temp_min, temp_sec, config.config_05);
         }
         
+        // Status buffer esteso
+        const char* buf_ext_status = encoder_buffer_extended ? "OK" : "ERR";
+        
         snprintf(buffer, buffer_size,
             "=== STATO DOOR TASK ===\n"
             "Timestamp: %s\n"
@@ -325,7 +366,8 @@ extern "C" void get_door_status(char* buffer, size_t buffer_size, const char* su
             "\n"
             "ENCODER:\n"
             "  Raw: %u  |  Corrected: %u (%.1f°)  |  Magnitude: %u\n"
-            "  Buffer index: %u  |  I2C: %s\n"
+            "  Buffer index: %u  |  Buffer ext idx: %zu  |  I2C: %s\n"
+            "  Buffer ext: %s  |  Buffer ext addr: %p\n"
             "\n"
             "GPIO:\n"
             "  Infrared: %s  |  Detect: %s  |  LED rosso: %s  |  LED blu: %s\n"
@@ -346,7 +388,9 @@ extern "C" void get_door_status(char* buffer, size_t buffer_size, const char* su
             door_open ? "SÌ" : "NO",
             temp_closed_active ? "SÌ" : "NO",
             lastRawAngle, lastCorrectedAngle, degrees, lastMagnitude,
-            (unsigned)encoder_buffer_index, encoder_i2c_initialized ? "OK" : "ERR",
+            (unsigned)encoder_buffer_index, encoder_buffer_extended_index, 
+            encoder_i2c_initialized ? "OK" : "ERR",
+            buf_ext_status, encoder_buffer_extended,
             gpio_get_level(INFRARED) ? "ON" : "OFF",
             gpio_get_level(DETECTED) ? "ON" : "OFF",
             gpio_get_level(LED_ROSSO) ? "ON" : "OFF",
@@ -368,12 +412,114 @@ extern "C" void get_door_status(char* buffer, size_t buffer_size, const char* su
     }
 }
 
+// NUOVA FUNZIONE DIAGNOSTICA per buffer esteso
+extern "C" void get_buffer_extended_status(char* buffer, size_t buffer_size) {
+    if (encoder_buffer_extended == nullptr) {
+        snprintf(buffer, buffer_size, "ERRORE: Buffer esteso non inizializzato");
+        return;
+    }
+    
+    time_t now;
+    time(&now);
+    struct tm *tm_now = localtime(&now);
+    char time_str[20];
+    strftime(time_str, sizeof(time_str), "%H:%M:%S", tm_now);
+    
+    // Calcola età del campione più vecchio nel buffer
+    uint32_t samples_in_buffer = (encoder_buffer_extended_total_samples < ENCODER_BUFFER_EXTENDED_SIZE) 
+                               ? (uint32_t)encoder_buffer_extended_total_samples 
+                               : ENCODER_BUFFER_EXTENDED_SIZE;
+    
+    float hours_coverage = (samples_in_buffer * 0.1f) / 3600.0f;
+    float memory_used_mb = (sizeof(EncoderDataExtended) * ENCODER_BUFFER_EXTENDED_SIZE) / (1024.0f * 1024.0f);
+    float fill_percentage = (float)samples_in_buffer / ENCODER_BUFFER_EXTENDED_SIZE * 100.0f;
+    
+    snprintf(buffer, buffer_size,
+        "=== BUFFER ESTESO ===\n"
+        "Timestamp: %s\n"
+        "Indirizzo: %p\n"
+        "\n"
+        "DIMENSIONI:\n"
+        "  Capacità: %lu campioni (24h esatte)\n"
+        "  Dimensione elemento: %zu bytes\n"
+        "  Memoria totale: %.1f MB\n"
+        "  Copertura: 24.0 ore\n"
+        "\n"
+        "STATO ATTUALE:\n"
+        "  Indice corrente: %zu\n"
+        "  Campioni nel buffer: %lu\n"
+        "  Riempimento: %.1f%%\n"
+        "  Copertura attuale: %.1f ore\n"
+        "\n"
+        "STATISTICHE:\n"
+        "  Campioni totali: %llu\n"
+        "  Avvolgimenti: %lu\n"
+        "  Ultimo elemento:\n"
+        "    Angle: %lu, IR: %lu, Detect: %lu\n"
+        "    Door: %lu, TempClosed: %lu, Auth: %lu\n"
+        "    EventDuration: %lu decimi (%.1fs)\n",
+        
+        time_str,
+        encoder_buffer_extended,
+        (unsigned long)ENCODER_BUFFER_EXTENDED_SIZE,
+        sizeof(EncoderDataExtended),
+        memory_used_mb,
+        
+        encoder_buffer_extended_index,
+        (unsigned long)samples_in_buffer,
+        fill_percentage,
+        hours_coverage,
+        
+        (unsigned long long)encoder_buffer_extended_total_samples,
+        (unsigned long)encoder_buffer_extended_wraps,
+        
+        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].rawAngle :
+            (encoder_buffer_extended_total_samples > 0 ? 
+                encoder_buffer_extended[ENCODER_BUFFER_EXTENDED_SIZE - 1].rawAngle : 0)),
+        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].infrared : 0),
+        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].detect : 0),
+        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].door_open : 0),
+        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].temp_closed : 0),
+        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].authorized : 0),
+        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].event_duration : 0),
+        encoder_buffer_extended_index > 0 ? 
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].event_duration / 10.0f : 0.0f
+    );
+}
+
 // =====================================
 // Main door task
 // =====================================
 extern "C" void door_task(void *pv) {
     door_gpio_init_once();
     servo_init_once();
+
+    // NUOVO: Inizializza buffer esteso in PSRAM
+    esp_err_t ret = init_extended_buffer();
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Impossibile inizializzare buffer esteso, task terminato");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // DEBUG: Verifica dove sono allocati i buffer
+    ESP_LOGI(TAG, "=== DEBUG BUFFER ALLOCATION ===");
+    ESP_LOGI(TAG, "encoder_buffer address: %p", encoder_buffer);
+    ESP_LOGI(TAG, "encoder_buffer size: %u bytes", sizeof(encoder_buffer));
+    
+    // Verifica se è in PSRAM (indirizzi PSRAM iniziano tipicamente con 0x3C...)
+    if ((uint32_t)encoder_buffer >= 0x3C000000 && (uint32_t)encoder_buffer < 0x3E000000) {
+        ESP_LOGI(TAG, "encoder_buffer è in PSRAM ✓");
+    } else {
+        ESP_LOGI(TAG, "encoder_buffer è in DRAM interna ✗");
+    }
 
     // Inizializza AS5600
     if (!encoder_i2c_initialized) {
@@ -417,10 +563,10 @@ extern "C" void door_task(void *pv) {
                 door_open = true;
                 setServoPosition(true);
                 time_t now_init;
-                time(&now_init);  // CORREZIONE: usa time_t invece di stringa
+                time(&now_init);
                 struct tm *tm_now = localtime(&now_init);
                 strftime(time_str, sizeof(time_str), "%d/%m/%Y %H:%M:%S", tm_now);
-                add_log_entry(now_init, "Modalità sempre aperto", "Modalità Sempre Aperto", 0, 0, true);  // CORREZIONE
+                add_log_entry(now_init, "Modalità sempre aperto", "Modalità Sempre Aperto", 0, 0, true);
                 ESP_LOGI(TAG, "Porta aperta per modalità ALWAYS_OPEN");
             }
             break;
@@ -430,10 +576,10 @@ extern "C" void door_task(void *pv) {
                 door_open = false;
                 setServoPosition(false);
                 time_t now_init;
-                time(&now_init);  // CORREZIONE: usa time_t invece di stringa
+                time(&now_init);
                 struct tm *tm_now = localtime(&now_init);
                 strftime(time_str, sizeof(time_str), "%d/%m/%Y %H:%M:%S", tm_now);
-                add_log_entry(now_init, "Modalità sempre chiuso", "Modalità Sempre Chiuso", 0, 0, false);  // CORREZIONE
+                add_log_entry(now_init, "Modalità sempre chiuso", "Modalità Sempre Chiuso", 0, 0, false);
                 ESP_LOGI(TAG, "Porta chiusa per modalità ALWAYS_CLOSED");
             }
             break;
@@ -444,10 +590,10 @@ extern "C" void door_task(void *pv) {
                 door_open = false;
                 setServoPosition(false);
                 time_t now_init;
-                time(&now_init);  // CORREZIONE: usa time_t invece di stringa
+                time(&now_init);
                 struct tm *tm_now = localtime(&now_init);
                 strftime(time_str, sizeof(time_str), "%d/%m/%Y %H:%M:%S", tm_now);
-                add_log_entry(now_init, "Modalità automatica", "Modalità Automatica", 0, 0, false);  // CORREZIONE
+                add_log_entry(now_init, "Modalità automatica", "Modalità Automatica", 0, 0, false);
                 ESP_LOGI(TAG, "Porta chiusa per modalità AUTO");
             }
             break;
@@ -485,7 +631,7 @@ extern "C" void door_task(void *pv) {
                     gpio_set_level(LED_ROSSO, LED_ON);
                     door_open = true;
                     setServoPosition(true);
-                    add_log_entry(now, "Modalità sempre aperto", "Modalità Sempre Aperto", 0, 0, true);  // CORREZIONE: usa now invece di timestamp_full
+                    add_log_entry(now, "Modalità sempre aperto", "Modalità Sempre Aperto", 0, 0, true);
                     ESP_LOGI(TAG, "Porta aperta per modalità ALWAYS_OPEN");
                 }
             } else if (current_mode == ALWAYS_CLOSED) {
@@ -493,7 +639,7 @@ extern "C" void door_task(void *pv) {
                     gpio_set_level(LED_ROSSO, LED_OFF);
                     door_open = false;
                     setServoPosition(false);
-                    add_log_entry(now, "Modalità sempre chiuso", "Modalità Sempre Chiuso", 0, 0, false);  // CORREZIONE: usa now invece di timestamp_full
+                    add_log_entry(now, "Modalità sempre chiuso", "Modalità Sempre Chiuso", 0, 0, false);
                     ESP_LOGI(TAG, "Porta chiusa per modalità ALWAYS_CLOSED");
                 }
             } else if (current_mode == AUTO) {
@@ -501,10 +647,10 @@ extern "C" void door_task(void *pv) {
                     gpio_set_level(LED_ROSSO, LED_OFF);
                     door_open = false;
                     setServoPosition(false);
-                    add_log_entry(now, "Modalità automatica", "Modalità Automatica", 0, 0, false);  // CORREZIONE: usa now invece di timestamp_full
+                    add_log_entry(now, "Modalità automatica", "Modalità Automatica", 0, 0, false);
                     ESP_LOGI(TAG, "Porta chiusa per modalità AUTO");
                 } else {
-                    add_log_entry(now, "Modalità automatica", "Modalità Automatica", 0, 0, false);  // CORREZIONE: usa now invece di timestamp_full
+                    add_log_entry(now, "Modalità automatica", "Modalità Automatica", 0, 0, false);
                     ESP_LOGI(TAG, "Passaggio a modalità AUTO");
                 }
             }
@@ -525,7 +671,7 @@ extern "C" void door_task(void *pv) {
             gpio_set_level(DETECTED, LED_ON);
             detect = true;
             is_authorized = false;
-            strcpy(cat_name_evento, "Sconosciuto"); //0830  aggiunto da Arduino
+            strcpy(cat_name_evento, "Sconosciuto");
             country_code = last_country_code;
             device_code = last_device_code;
 
@@ -535,7 +681,7 @@ extern "C" void door_task(void *pv) {
                     strncpy(cat_name, config.authorized_cats[i].name.c_str(), sizeof(cat_name) - 1);
                     cat_name[sizeof(cat_name) - 1] = '\0';
                     is_authorized = config.authorized_cats[i].authorized;
-                    country_code = config.authorized_cats[i].country_code;  //0830 superfluo
+                    country_code = config.authorized_cats[i].country_code;
                     break;
                 }
             }
@@ -617,7 +763,6 @@ extern "C" void door_task(void *pv) {
                     last_unauthorized_log = xTaskGetTickCount();
                 }
             }
-            //contaporta = 0; //0830 verificare
             door_sync_count = 0; // Reset dopo elaborazione
         } else {
             gpio_set_level(DETECTED, LED_OFF);
@@ -645,9 +790,8 @@ extern "C" void door_task(void *pv) {
                 door_open = true;
                 door_timer_start = xTaskGetTickCount();
                 setServoPosition(true);
-                //contaporta = 0; //0830 verificare
                 ESP_LOGI(TAG, "[%s] Apertura manuale tramite pulsante", time_str);
-                add_log_entry(now, "Manuale", "Manuale", 0, 0, true);  // CORREZIONE: usa now invece di timestamp_full
+                add_log_entry(now, "Manuale", "Manuale", 0, 0, true);
                 log_emitted = true;
             } else if (door_open) {
                 // Controllo timeout chiusura
@@ -707,7 +851,7 @@ extern "C" void door_task(void *pv) {
         if (stato_evento == IDLE) {
             if (trigger) {
                 stato_evento = EVENTO_ATTIVO;
-                timestamp_inizio_time = now;  // CORREZIONE: salva il time_t
+                timestamp_inizio_time = now;
                 strncpy(timestamp_inizio, timestamp_full, sizeof(timestamp_inizio));
                 indice_inizio = 0;
                 passaggio_confermato = false;
@@ -777,7 +921,7 @@ extern "C" void door_task(void *pv) {
                 const char* tipo = passaggio_confermato ? 
                     (strcmp(direzione, "Uscita") == 0 ? "*Uscita" : "*Ingresso") : "*Affaccio";
                 
-                add_log_entry(timestamp_inizio_time, tipo, cat_name_evento, country_code_evento, device_code_evento, authorized_evento);  // CORREZIONE: usa timestamp_inizio_time
+                add_log_entry(timestamp_inizio_time, tipo, cat_name_evento, country_code_evento, device_code_evento, authorized_evento);
                 ESP_LOGI(TAG, "Evento chiuso forzatamente per newcode, tipo: %s, Nome: %s, Durata: %.2f s", 
                          tipo, cat_name_evento, durata_effettiva);
                 stato_evento = IDLE;
@@ -785,7 +929,7 @@ extern "C" void door_task(void *pv) {
                 // Reinizializza per nuovo evento se trigger ancora attivo
                 if (trigger) {
                     stato_evento = EVENTO_ATTIVO;
-                    timestamp_inizio_time = now;  // CORREZIONE: salva il time_t
+                    timestamp_inizio_time = now;
                     strncpy(timestamp_inizio, timestamp_full, sizeof(timestamp_inizio));
                     indice_inizio = 0;
                     passaggio_confermato = false;
@@ -816,25 +960,14 @@ extern "C" void door_task(void *pv) {
                 const char* tipo = passaggio_confermato ? 
                     (strcmp(direzione, "Uscita") == 0 ? "*Uscita" : "*Ingresso") : "*Affaccio";
                 
-                add_log_entry(timestamp_inizio_time, tipo, cat_name_evento, country_code_evento, device_code_evento, authorized_evento);  // CORREZIONE: usa timestamp_inizio_time
+                add_log_entry(timestamp_inizio_time, tipo, cat_name_evento, country_code_evento, device_code_evento, authorized_evento);
                 ESP_LOGI(TAG, "Evento terminato, tipo: %s, Nome: %s, Durata: %.2f s", 
                          tipo, cat_name_evento, durata_effettiva);
                 stato_evento = IDLE;
-
-                //0830   questo pezzo aggiundo copiato da Arduino
-                /*passaggio_confermato = false;
-                direzione = NULL;
-                conteggio_senza_trigger = 0;
-                ultimo_trigger_idx = 0;
-                trigger_porta_idx = -1;
-                passaggio_porta_idx = -1;
-                detect_idx = -1;
-                infrared_idx = -1;
-                codice_associato = false;*/
             }
         }
 
-        // Salva nel buffer encoder (bit-packed)
+        // Salva nel buffer encoder ORIGINALE (mantenuto per compatibilità)
         EncoderData data = {};
         data.rawAngle = correctedAngle & 0xFFF; // 12 bit
         data.infrared = infrared ? 1 : 0;
@@ -844,6 +977,48 @@ extern "C" void door_task(void *pv) {
         
         encoder_buffer[encoder_buffer_index] = data;
         encoder_buffer_index = (encoder_buffer_index + 1) % ENCODER_BUFFER_SIZE;
+
+        // Salva nel buffer ESTESO a 32-bit (nuovo) - SOLO se allocato
+        if (encoder_buffer_extended != nullptr) {
+            EncoderDataExtended data_ext = {};
+            data_ext.rawAngle = correctedAngle & 0xFFF;     // 12 bit identico al vecchio
+            data_ext.infrared = infrared ? 1 : 0;
+            data_ext.detect = detect ? 1 : 0;
+            data_ext.door_open = door_open ? 1 : 0;
+            data_ext.newcode = newcode ? 1 : 0;
+            data_ext.temp_closed = temp_closed_active ? 1 : 0;  // NUOVO campo
+            data_ext.manual_open = (!gpio_get_level(PULSANTE_BLU)) ? 1 : 0;  // NUOVO campo
+            data_ext.authorized = is_authorized ? 1 : 0;        // NUOVO campo
+            data_ext.servo_moving = 0;  // TODO: implementare rilevamento movimento servo
+            
+            // Calcola durata evento corrente (cappata a 255 decimi = 25.5s)
+            uint32_t event_duration_decisecs = 0;
+            if (stato_evento == EVENTO_ATTIVO && indice_inizio <= 2550) {  // 255*10 = 2550 campioni max
+                event_duration_decisecs = (indice_inizio + 1) / 10;  // Converti campioni in decimi di secondo
+                if (event_duration_decisecs > 255) event_duration_decisecs = 255;
+            }
+            data_ext.event_duration = event_duration_decisecs;
+            data_ext.reserved = 0;      // Riservato per il futuro
+            
+            // Salva con gestione avvolgimento circolare
+            encoder_buffer_extended[encoder_buffer_extended_index] = data_ext;
+            
+            // CORREZIONE: Uso variabili temporanee per evitare warning volatile
+            uint64_t temp_total = encoder_buffer_extended_total_samples;
+            temp_total++;
+            encoder_buffer_extended_total_samples = temp_total;
+            
+            encoder_buffer_extended_index = (encoder_buffer_extended_index + 1) % ENCODER_BUFFER_EXTENDED_SIZE;
+
+            // Log avvolgimento ogni 24 ore
+            if (temp_total > 0 && (temp_total % ENCODER_BUFFER_EXTENDED_SIZE) == 0) {
+                uint32_t temp_wraps = encoder_buffer_extended_wraps;
+                temp_wraps++;
+                encoder_buffer_extended_wraps = temp_wraps;
+                ESP_LOGI(TAG, "Buffer esteso avvolto - ciclo #%lu (campioni totali: %llu)", 
+                         (unsigned long)temp_wraps, (unsigned long long)temp_total);
+            }
+        }
 
         lastRawAngle = rawAngle;
         lastMagnitude = magnitude;

@@ -11,6 +11,7 @@ extern "C" {
 
 #include <stddef.h>
 void get_door_status(char* buffer, size_t buffer_size, const char* subcommand);
+void get_buffer_extended_status(char* buffer, size_t buffer_size);
 
 #ifdef __cplusplus
 }

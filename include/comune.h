@@ -111,6 +111,35 @@ struct EncoderData {
 extern EXT_RAM_BSS_ATTR EncoderData encoder_buffer[ENCODER_BUFFER_SIZE];
 extern volatile size_t encoder_buffer_index;
 
+
+
+// Nuovo buffer a 32-bit per dati estesi (futuro replacement di encoder_buffer)
+struct EncoderDataExtended {
+    uint32_t infrared : 1;      // Bit 0 - Sensore infrarosso
+    uint32_t detect : 1;        // Bit 1 - RFID rilevato
+    uint32_t door_open : 1;     // Bit 2 - Porta aperta
+    uint32_t newcode : 1;       // Bit 3 - Nuovo codice RFID
+    uint32_t temp_closed : 1;   // Bit 4 - Stato temporaneamente chiuso (ALWAYS_OPEN mode)
+    uint32_t manual_open : 1;   // Bit 5 - Apertura manuale (pulsante)
+    uint32_t authorized : 1;    // Bit 6 - Codice autorizzato
+    uint32_t servo_moving : 1;  // Bit 7 - Servo in movimento
+    uint32_t rawAngle : 12;     // Bit 8-19 - Angolo raw (12 bit = 0-4095)
+    uint32_t event_duration : 8; // Bit 20-27 - Durata evento in decimi di secondo (0-255 = 0-25.5s)
+    uint32_t reserved : 4;      // Bit 28-31 - Riservato per espansioni future
+};
+
+// Buffer esteso: esattamente 24 ore di campioni @ 100ms
+// 24h * 3600s/h * 10 campioni/s = 864,000 campioni
+#define ENCODER_BUFFER_EXTENDED_SIZE 864000
+
+// Buffer esteso - Allocazione dinamica in PSRAM
+extern EncoderDataExtended* encoder_buffer_extended;
+extern volatile size_t encoder_buffer_extended_index;
+
+// Statistiche buffer esteso
+extern volatile uint32_t encoder_buffer_extended_wraps;  // Contatore avvolgimenti
+extern volatile uint64_t encoder_buffer_extended_total_samples;  // Ca
+
 // Variabili globali
 extern config_t config;
 extern LogEntry log_buffer[LOG_BUFFER_SIZE];

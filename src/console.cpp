@@ -252,6 +252,7 @@ static void print_help() {
     cli_puts("  system          - diagnostiche avanzate sistema\n");
     cli_puts("  system flash    - informazioni memoria flash\n");
     cli_puts("  system task     - stato task FreeRTOS\n");
+    cli_puts("  buff            - stato encoder buffer esteso\n");
     
 }
 
@@ -425,11 +426,22 @@ static void exec_command(const char* line) {
     if (strncmp(cmd, "door", 4) == 0) {
     const char* subcmd = (strlen(cmd) > 5) ? cmd + 5 : "";
     
-    extern void get_door_status(char*, size_t, const char*);
+    //extern void get_door_status(char*, size_t, const char*);
     get_door_status(cli_unified_buffer, sizeof(cli_unified_buffer), subcmd);
     cli_printbuf(cli_unified_buffer);
     return;
     }
+
+    if (strncmp(cmd, "buff", 4) == 0) {
+    const char* subcmd = (strlen(cmd) > 5) ? cmd + 5 : "";
+    
+    //extern void get_buffer_extended_status(char*, size_t, const char*);
+    get_buffer_extended_status(cli_unified_buffer, sizeof(cli_unified_buffer));
+    cli_printbuf(cli_unified_buffer);
+    return;
+    }
+    
+    
     
     if (strncmp(cmd, "wifi", 4) == 0) {
         const char* subcmd = (strlen(cmd) > 5) ? cmd + 5 : "";
