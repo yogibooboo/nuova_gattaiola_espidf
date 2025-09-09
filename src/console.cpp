@@ -250,8 +250,7 @@ static void print_help() {
     cli_puts("  wifi            - stato connessione WiFi\n");  
     cli_puts("  wifi scan       - scan reti WiFi disponibili\n");  // 
     cli_puts("  system          - diagnostiche avanzate sistema\n");
-    cli_puts("  system reset    - causa ultimo reset\n");
-    cli_puts("  system info     - informazioni chip e firmware\n");
+    cli_puts("  system flash    - informazioni memoria flash\n");
     cli_puts("  system task     - stato task FreeRTOS\n");
     
 }

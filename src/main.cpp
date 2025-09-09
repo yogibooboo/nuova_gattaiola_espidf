@@ -219,8 +219,8 @@ void print_task(void *pvParameters) {
 
         // Salva in buffer per comando "log" - PRIMA di stampare
         snprintf(last_periodic_log, sizeof(last_periodic_log),
-            "[%s] Sync: %u, OK: %u, Last Seq: [%02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X, %02X], "
-            "DC: %llu, CC: %u, diff: %u, freq: %u, a_s: %ld, lastADC: %u,Angle:%u/%u,mag:%u",
+            "[%s] Sync: %u, OK: %u, [%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X,%02X], "
+            "DC: %llu, CC: %u, diff: %u, freq: %u, a_s: %ld, ADC: %u,Angle:%u/%u,mag:%u",
             time_str,
             (unsigned)sync_count,
             (unsigned)display_sync_count,

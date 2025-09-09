@@ -68,6 +68,19 @@ static int32_t debug_numbit = 0;
 static bool debug_newpeak = false;
 static uint8_t debug_confro = 0;
 
+
+static uint32_t processing_time_ms = 0;
+static uint32_t processing_time_max = 0;
+static uint32_t processing_time_min = UINT32_MAX;
+static uint32_t processing_cycles_count = 0;
+static uint64_t last_delay_exit = 0;
+static uint64_t cycle_start = 0;
+static uint32_t processing_time_abs_max = 0;
+static uint32_t processing_time_abs_min = UINT32_MAX;
+static uint32_t reset_cycles_count = 0;
+static bool abs_values_valid = false; // Validi solo dopo il secondo reset
+
+
 // *** VARIABILI GLOBALI SEMPLIFICATE ***
 // *** CALIBRAZIONE ADC RIMOSSA PER TEST ***
 
@@ -195,12 +208,64 @@ static void media_correlazione_32() {
     vTaskDelay(10 / portTICK_PERIOD_MS);     //assicura che inizialmente ci siano un pÃ² di campioni
 
     while (true) {
-        available_samples = (int32_t)(i_interrupt - ia);
-        if (available_samples <= 10) {
-            vTaskDelay(pdMS_TO_TICKS(72));
-            continue;
+
+
+
+    available_samples = (int32_t)(i_interrupt - ia);
+    
+   
+// Nel loop, modifica la sezione di calcolo timing:
+if (available_samples <= 10) {
+    // Calcola il tempo di elaborazione PRIMA del continue
+    if (cycle_start > 0) {
+        last_delay_exit = esp_timer_get_time();
+        uint32_t elapsed_ms = (last_delay_exit - cycle_start)/1000;
+        processing_time_ms = elapsed_ms;
+        
+        // Aggiorna min/max correnti
+        if (elapsed_ms > processing_time_max) {
+            processing_time_max = elapsed_ms;
         }
-         
+        if (elapsed_ms < processing_time_min) {
+            processing_time_min = elapsed_ms;
+        }
+        
+        // Aggiorna min/max assoluti (solo se validi)
+        if (abs_values_valid) {
+            if (elapsed_ms > processing_time_abs_max) {
+                processing_time_abs_max = elapsed_ms;
+            }
+            if (elapsed_ms < processing_time_abs_min) {
+                processing_time_abs_min = elapsed_ms;
+            }
+        }
+        
+        processing_cycles_count++;
+        
+        // Reset ogni 100 cicli
+        if (processing_cycles_count >= 100) {
+            // Salva valori assoluti prima del reset (dal secondo ciclo in poi)
+            if (reset_cycles_count >= 1) {
+                if (!abs_values_valid) {
+                    // Primo reset valido - inizializza assoluti
+                    processing_time_abs_max = processing_time_max;
+                    processing_time_abs_min = processing_time_min;
+                    abs_values_valid = true;
+                }
+            }
+            
+            // Reset valori correnti
+            processing_time_min = elapsed_ms; // Riparti dal valore corrente
+            processing_time_max = elapsed_ms;
+            processing_cycles_count = 1; // Riparti da 1 (include il ciclo corrente)
+            reset_cycles_count++;
+        }
+    }
+    
+    vTaskDelay(pdMS_TO_TICKS(72));
+    cycle_start = esp_timer_get_time();
+    continue;
+}
         //const int larghezza_finestra=8;
         const int lunghezza_correlazione=32;
         const int soglia_mezzo_bit=25;
@@ -405,6 +470,11 @@ extern "C" void get_decoder_status(char* buffer, size_t buffer_size, const char*
             "  dist[0]: %ld\n"
             "  datoadc: %u\n"
             "\n"
+            "TIMING ELABORAZIONE:\n"
+            "  Ultimo ciclo: %lu ms\n"
+            "  Tempo min: %lu ms (abs: %lu ms)\n"
+            "  Tempo max: %lu ms (abs: %lu ms)\n"
+            "  Cicli misurati: %lu/100 (reset #%lu)\n"
             "Subcomandi: filt, corr, peaks, dist, adc, all",
             
             last_periodic_log,
@@ -427,7 +497,14 @@ extern "C" void get_decoder_status(char* buffer, size_t buffer_size, const char*
             corr[0],
             peaks[0],
             dist[0],
-            (unsigned)datoadc
+            (unsigned)datoadc,
+            processing_time_ms,
+            processing_time_min,
+            abs_values_valid ? processing_time_abs_min : 0,
+            processing_time_max, 
+            abs_values_valid ? processing_time_abs_max : 0,
+            processing_cycles_count,
+            reset_cycles_count
         );
     } else if (strcmp(subcommand, "filt") == 0) {
         int len = snprintf(buffer, buffer_size, "=== BUFFER FILT (primi 25) ===\n");
