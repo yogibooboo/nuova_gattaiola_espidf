@@ -15,6 +15,11 @@
 #include "time_sync.h"
 #include "buffers_psram.h"
 #include "core1.h"
+#include "door.h"
+
+#include <sys/socket.h>
+#include <fcntl.h>
+#include <errno.h>
 
 void start_webserver_if_not_running(void);
 void stop_webserver(void);
@@ -88,6 +93,38 @@ void unregister_cli_client(int fd) {
     }
 }
 
+
+// 2. AGGIUNGI questa funzione di verifica socket dopo le funzioni register/unregister esistenti
+static bool is_socket_valid(int fd) {
+    if (fd < 0) return false;
+    
+    int socket_error = 0;
+    socklen_t len = sizeof(socket_error);
+    
+    // Controlla se il socket ha errori
+    if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &len) != 0) {
+        return false;
+    }
+    
+    if (socket_error != 0) {
+        return false;
+    }
+    
+    // Test aggiuntivo: prova un send non-bloccante di 0 byte
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags != -1) {
+        fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+        ssize_t result = send(fd, NULL, 0, MSG_NOSIGNAL);
+        fcntl(fd, F_SETFL, flags); // Ripristina flag originali
+        
+        if (result < 0 && (errno == ECONNRESET || errno == EPIPE || errno == ENOTCONN)) {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
 // SISTEMA DI CATTURA ORIGINALE RIPRISTINATO
 // Funzione per catturare output CLI - chiamata da console.cpp
 extern "C" void websocket_broadcast_to_cli(const char* data, size_t len) {
@@ -118,6 +155,41 @@ static const char* get_captured_output() {
     return cli_output_buffer;
 }
 
+
+// 3. AGGIUNGI questa funzione di cleanup periodico
+static void websocket_cleanup_dead_connections(void) {
+    // Cleanup client WS
+    for (int i = g_ws_client_count - 1; i >= 0; i--) {
+        int fd = g_ws_client_fds[i];
+        if (!is_socket_valid(fd)) {
+            ESP_LOGW(TAG, "Cleanup WebSocket morto fd=%d (indice %d)", fd, i);
+            unregister_ws_client(fd);
+        }
+    }
+    
+    // Cleanup client CLI
+    for (int i = g_cli_client_count - 1; i >= 0; i--) {
+        int fd = g_cli_client_fds[i];
+        if (!is_socket_valid(fd)) {
+            ESP_LOGW(TAG, "Cleanup CLI WebSocket morto fd=%d (indice %d)", fd, i);
+            unregister_cli_client(fd);
+        }
+    }
+    
+    ESP_LOGI(TAG, "Cleanup completato: %d client WS, %d client CLI", 
+             g_ws_client_count, g_cli_client_count);
+}
+
+// 4. AGGIUNGI questo task (inseriscilo dopo le funzioni esistenti, prima di ws_handler)
+static void websocket_cleanup_task(void *pvParameters) {
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(15000)); // Ogni 15 secondi
+        websocket_cleanup_dead_connections();
+    }
+}
+
+
+        
 // =====================================
 // WebSocket handler
 // =====================================
@@ -127,6 +199,15 @@ esp_err_t ws_handler(httpd_req_t *req) {
         ESP_LOGI(TAG, "Handshake WebSocket completato");
         register_ws_client(httpd_req_to_sockfd(req));
         return ESP_OK;
+    }
+
+    // AGGIUNTO: Verifica validità connessione prima di processare
+    int client_fd = httpd_req_to_sockfd(req);
+    if (!is_socket_valid(client_fd)) {
+        ESP_LOGW(TAG, "Socket invalido rilevato durante ws_handler, cleanup fd=%d", client_fd);
+        unregister_ws_client(client_fd);
+        unregister_cli_client(client_fd);
+        return ESP_FAIL;
     }
 
     // Primo passaggio: solo per conoscere la lunghezza
@@ -141,10 +222,12 @@ esp_err_t ws_handler(httpd_req_t *req) {
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WS recv (len) err: %s (0x%x)", esp_err_to_name(ret), ret);
-        // Deregistra client in caso di errore
-        int client_fd = httpd_req_to_sockfd(req);
+        // MIGLIORATO: Cleanup più aggressivo su errori
         unregister_ws_client(client_fd);
         unregister_cli_client(client_fd);
+        
+        // Forza cleanup se necessario
+        websocket_cleanup_dead_connections();
         return ret;
     }
 
@@ -285,6 +368,161 @@ esp_err_t ws_handler(httpd_req_t *req) {
         
         if (ret == ESP_OK) {
             ESP_LOGI(TAG, "Timestamp e magnitude inviati al client");
+        }
+        
+        buf_put_ws_frame(wbuf);
+        return ret;
+    }
+
+
+
+    // --- Gestione "get_buffer_window:timestamp:duration" ---
+    if (strncmp((const char*)wbuf, "get_buffer_window:", 18) == 0) {
+        // Parse parametri: "get_buffer_window:1705750025:30"
+        const char* params = (const char*)wbuf + 18;
+        
+        // Trova il primo ':'
+        const char* colon = strchr(params, ':');
+        if (!colon) {
+            const char* error_resp = "Errore: formato comando. Usa: get_buffer_window:timestamp:duration";
+            httpd_ws_frame_t error_pkt = {
+                .final = true,
+                .fragmented = false,
+                .type = HTTPD_WS_TYPE_TEXT,
+                .payload = (uint8_t*)error_resp,
+                .len = strlen(error_resp)
+            };
+            httpd_ws_send_frame(req, &error_pkt);
+            buf_put_ws_frame(wbuf);
+            return ESP_OK;
+        }
+        
+        // Estrai timestamp
+        char timestamp_str[32];
+        size_t timestamp_len = colon - params;
+        if (timestamp_len >= sizeof(timestamp_str)) {
+            timestamp_len = sizeof(timestamp_str) - 1;
+        }
+        strncpy(timestamp_str, params, timestamp_len);
+        timestamp_str[timestamp_len] = '\0';
+        
+        // Estrai duration
+        const char* duration_str = colon + 1;
+        
+        // Converti a numeri
+        time_t center_timestamp = (time_t)atoll(timestamp_str);
+        int duration_seconds = atoi(duration_str);
+        
+        // Validazione parametri
+        if (center_timestamp <= 0 || duration_seconds <= 0 || duration_seconds > 300) {
+            const char* error_resp = "Errore: parametri non validi. Timestamp > 0, duration 1-300 sec";
+            httpd_ws_frame_t error_pkt = {
+                .final = true,
+                .fragmented = false,
+                .type = HTTPD_WS_TYPE_TEXT,
+                .payload = (uint8_t*)error_resp,
+                .len = strlen(error_resp)
+            };
+            httpd_ws_send_frame(req, &error_pkt);
+            buf_put_ws_frame(wbuf);
+            return ESP_OK;
+        }
+        
+        ESP_LOGI(TAG, "Richiesta buffer window: timestamp=%ld, duration=%d sec", 
+                 (long)center_timestamp, duration_seconds);
+        
+        // Buffer temporaneo per campioni 
+        // ===== RIUSO BUFFER ESISTENTE - STILE EMBEDDED =====
+        static_assert(sizeof(EncoderDataExtended) == sizeof(uint32_t), 
+                    "EncoderDataExtended deve essere esattamente 32-bit");
+        static_assert(sizeof(EncoderDataExtended) == 4, 
+                    "Verifica dimensione EncoderDataExtended");
+        static_assert(ENCODER_BUFFER_SIZE >= 7200, 
+                    "Buffer encoder troppo piccolo per finestra max");
+
+        // Cast intelligente del buffer esistente 
+        EncoderDataExtended* window_buffer = (EncoderDataExtended*)temp_encoder_buffer;
+        const size_t MAX_WINDOW_SAMPLES = ENCODER_BUFFER_SIZE; // Usa tutta la capacità disponibile (16384)
+
+        ESP_LOGI(TAG, "Riuso buffer encoder esistente: %zu campioni disponibili (%zu KB)", 
+                MAX_WINDOW_SAMPLES, (MAX_WINDOW_SAMPLES * sizeof(EncoderDataExtended)) / 1024);
+        
+        // Estrai finestra di dati
+        time_t actual_start_timestamp;
+        size_t extracted_samples = get_buffer_window_for_timestamp(
+            center_timestamp, duration_seconds, 
+            window_buffer, MAX_WINDOW_SAMPLES,
+            &actual_start_timestamp
+        );
+        
+        if (extracted_samples == 0) {
+            const char* error_resp = "Errore: nessun dato disponibile per il timestamp richiesto";
+            httpd_ws_frame_t error_pkt = {
+                .final = true,
+                .fragmented = false,
+                .type = HTTPD_WS_TYPE_TEXT,
+                .payload = (uint8_t*)error_resp,
+                .len = strlen(error_resp)
+            };
+            httpd_ws_send_frame(req, &error_pkt);
+            buf_put_ws_frame(wbuf);
+            return ESP_OK;
+        }
+        
+        ESP_LOGI(TAG, "Estratti %zu campioni, invio frame binario (%zu byte)", 
+                 extracted_samples, extracted_samples * sizeof(EncoderDataExtended));
+        
+        // 1. Invia frame binario con i dati
+        httpd_ws_frame_t data_frame = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_BINARY,
+            .payload = (uint8_t*)window_buffer,
+            .len = extracted_samples * sizeof(EncoderDataExtended)
+        };
+        
+        esp_err_t ret_data = httpd_ws_send_frame(req, &data_frame);
+        if (ret_data != ESP_OK) {
+            ESP_LOGE(TAG, "Errore invio frame binario window: %s", esp_err_to_name(ret_data));
+            buf_put_ws_frame(wbuf);
+            return ret_data;
+        }
+        
+        // 2. Invia frame JSON con metadati
+        char json_metadata[512];
+        time_t actual_end_timestamp = actual_start_timestamp + duration_seconds + 2;
+        
+        snprintf(json_metadata, sizeof(json_metadata),
+            "{"
+            "\"type\":\"buffer_window_metadata\","
+            "\"timestamp_center\":%ld,"
+            "\"timestamp_start\":%ld,"
+            "\"timestamp_end\":%ld,"
+            "\"duration_seconds\":%d,"
+            "\"sample_count\":%zu,"
+            "\"sample_interval_ms\":100"
+            "}",
+            (long)center_timestamp,
+            (long)actual_start_timestamp,
+            (long)actual_end_timestamp,
+            duration_seconds,
+            extracted_samples
+        );
+        
+        httpd_ws_frame_t metadata_frame = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_TEXT,
+            .payload = (uint8_t*)json_metadata,
+            .len = strlen(json_metadata)
+        };
+        
+        ret = httpd_ws_send_frame(req, &metadata_frame);
+        if (ret == ESP_OK) {
+            ESP_LOGI(TAG, "Buffer window inviato: %zu campioni, metadati: %s", 
+                     extracted_samples, json_metadata);
+        } else {
+            ESP_LOGE(TAG, "Errore invio metadati window: %s", esp_err_to_name(ret));
         }
         
         buf_put_ws_frame(wbuf);
@@ -549,6 +787,10 @@ void setup_wifi(void) {
     last_disconnect_time = 0;
     total_disconnect_count = 0;
     wifi_reconnect_count = 0;
+
+    ESP_LOGI(TAG, "Inizializzazione WiFi completata");
+    xTaskCreate(websocket_cleanup_task, "ws_cleanup", 2048, NULL, 1, NULL);
+    ESP_LOGI(TAG, "WebSocket cleanup task avviato");
 
     ESP_LOGI(TAG, "Inizializzazione WiFi completata");
 }

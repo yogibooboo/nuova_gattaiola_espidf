@@ -6,6 +6,10 @@
     <title>Gattaiola Intelligente</title>
     <link rel="icon" type="image/png" href="favicon.png">   
 	<link rel="manifest" href="manifest.json">  
+    <link rel="stylesheet" href="/modal-graph.css">
+    <script src="/modal-graph.js"></script>
+    <script src="/chart.min.js"></script>
+
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -77,6 +81,54 @@
         }
     </style>
 </head>
+
+<!-- Modal HTML Structure -->
+<div id="eventModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title" id="modalTitle">Analisi Evento</h2>
+            <span class="close" id="closeModal">&times;</span>
+        </div>
+        
+        <div class="modal-controls">
+            <div class="control-group">
+                <button class="btn-nav" id="prevEvent" title="Evento Precedente">‹</button>
+                <button class="btn-nav" id="nextEvent" title="Evento Successivo">›</button>
+            </div>
+            
+            <div class="control-group">
+                <label>Durata:</label>
+                <select id="durationSelect">
+                    <option value="10">10s</option>
+                    <option value="30" selected>30s</option>
+                    <option value="60">60s</option>
+                    <option value="120">120s</option>
+                </select>
+            </div>
+            
+            <div class="control-group">
+                <label>Mostra:</label>
+                <label class="toggle-switch">
+                    <input type="checkbox" id="showDetails" checked>
+                    <span class="slider"></span>
+                </label>
+                <span>Dettagli</span>
+            </div>
+        </div>
+        
+        <div class="chart-container">
+            <div class="loading-overlay" id="loadingOverlay">
+                Caricamento dati...
+            </div>
+            <canvas id="eventChart"></canvas>
+        </div>
+        
+        <div class="status-info" id="statusInfo">
+            Pronto per visualizzare l'evento
+        </div>
+    </div>
+</div>
+
 <body>
     <div class="container">
         <h1>Gattaiola ScheggiaRibes</h1>
@@ -107,25 +159,68 @@
         </table>
     </div>
     <script>
-        let ws = null;
+        window.ws = null;
         let isUpdatingMode = false; // Flag per evitare loop
 
-        function updateLog(data) {
-            let logBody = document.getElementById("logBody");
-            logBody.innerHTML = "";
-            data.log.forEach(entry => {
-                let row = document.createElement("tr");
-                row.innerHTML = `
-                    <td>${entry.timestamp}</td>
-                    <td>${entry.type}</td>
-                    <td>${entry.name}</td>
-                    <td>${entry.country_code}</td>
-                    <td>${entry.device_code}</td>
-                    <td>${entry.authorized ? "Sì" : "No"}</td>
-                `;
-                logBody.appendChild(row);
+    function updateLog(data) {
+        let logBody = document.getElementById("logBody");
+        logBody.innerHTML = "";
+        data.log.forEach((entry, index) => {
+            let row = document.createElement("tr");
+            
+            // Aggiungi timestamp come data attribute per il modal
+            row.dataset.timestamp = convertToUnixTimestamp(entry.timestamp);
+            row.dataset.eventIndex = index;
+            
+            // Aggiungi classe CSS e click handler
+            row.className = "log-entry-clickable";
+            row.style.cursor = "pointer";
+            
+            // Click handler per aprire il modal
+            row.addEventListener('click', function() {
+                openEventGraph(this);
             });
-        }
+            
+            // Hover effects
+            row.addEventListener('mouseenter', function() {
+                this.style.backgroundColor = "#f0f8ff";
+            });
+            row.addEventListener('mouseleave', function() {
+                this.style.backgroundColor = "";
+            });
+            
+            row.innerHTML = `
+                <td>${entry.timestamp}</td>
+                <td>${entry.type}</td>
+                <td>${entry.name}</td>
+                <td>${entry.country_code}</td>
+                <td>${entry.device_code}</td>
+                <td>${entry.authorized ? "Sì" : "No"}</td>
+            `;
+            logBody.appendChild(row);
+        });
+    }
+
+    // Funzione helper per convertire timestamp
+    function convertToUnixTimestamp(timestampStr) {
+        const parts = timestampStr.split(' ');
+        const datePart = parts[0]; // "10/01/2025"
+        const timePart = parts[1]; // "14:30:25"
+        
+        const dateComponents = datePart.split('/');
+        const timeComponents = timePart.split(':');
+        
+        const date = new Date(
+            parseInt(dateComponents[2]), // year
+            parseInt(dateComponents[1]) - 1, // month (0-based)
+            parseInt(dateComponents[0]), // day
+            parseInt(timeComponents[0]), // hour
+            parseInt(timeComponents[1]), // minute
+            parseInt(timeComponents[2])  // second
+        );
+        
+        return Math.floor(date.getTime() / 1000);
+    }
 
         function updateStatus() {
             fetch('/api/status')
@@ -149,28 +244,41 @@
         }
 
         function initWebSocket() {
-            ws = new WebSocket("ws://" + window.location.hostname + "/ws");
+            window.ws = new WebSocket("ws://" + window.location.hostname + "/ws");
 
-            ws.onopen = function() {
+            window.ws.onopen = function() {
                 console.log("WebSocket connesso (per comandi)");
             };
 
-            ws.onmessage = function(event) {
+            window.ws.onmessage = function(event) {
                 if (typeof event.data === "string") {
                     if (event.data.startsWith("Mode updated")) {
                         console.log("Modalità aggiornata via WebSocket");
-                        // Forza aggiornamento immediato dello stato
                         setTimeout(updateStatus, 500);
                     }
+                    // AGGIUNGERE: Gestione metadati per il modal
+                    else {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.type === 'buffer_window_metadata' && window.eventGraphModal) {
+                                window.eventGraphModal.handleMetadata(data);
+                            }
+                        } catch (e) {
+                            // Non è JSON, ignora
+                        }
+                    }
+                } else if (event.data instanceof Blob && window.eventGraphModal) {
+                    // AGGIUNGERE: Gestione dati binari per il modal
+                    window.eventGraphModal.handleBinaryData(event.data);
                 }
             };
 
-            ws.onclose = function() {
+            window.ws.onclose = function() {
                 console.log("WebSocket disconnesso, riconnessione...");
                 setTimeout(initWebSocket, 5000);
             };
 
-            ws.onerror = function(error) {
+            window.ws.onerror = function(error) {
                 console.log("Errore WebSocket:", error);
             };
         }
@@ -179,8 +287,8 @@
             let mode = document.getElementById("doorMode").value;
             isUpdatingMode = true; // Evita aggiornamenti durante il comando
             
-            if (ws && ws.readyState === WebSocket.OPEN) {
-                ws.send("set_door_mode:" + mode);
+            if (window.ws && window.ws.readyState === WebSocket.OPEN) {
+                window.ws.send("set_door_mode:" + mode);
                 // Reset flag dopo breve delay
                 setTimeout(() => {
                     isUpdatingMode = false;

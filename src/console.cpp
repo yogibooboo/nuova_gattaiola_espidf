@@ -1,6 +1,6 @@
 // src/console.cpp - Sistema di logging e console unificato
 #include "console.h"
-
+#include "comune.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>

@@ -494,6 +494,122 @@ extern "C" void get_buffer_extended_status(char* buffer, size_t buffer_size) {
     );
 }
 
+
+// Funzione per trovare l'indice del buffer più vicino a un timestamp
+static size_t find_buffer_index_by_timestamp(time_t target_timestamp) {
+    if (encoder_buffer_extended == nullptr || encoder_buffer_extended_total_samples == 0) {
+        return 0;
+    }
+    
+    // Calcola timestamp del campione più recente (ora corrente)
+    time_t now;
+    time(&now);
+    
+    // Calcola differenza in campioni (1 campione = 0.1s = 100ms)
+    int64_t diff_seconds = now - target_timestamp;
+    int64_t diff_samples = diff_seconds * 10; // 10 campioni per secondo
+    
+    // Gestisci casi limite
+    if (diff_samples < 0) {
+        // Timestamp nel futuro - ritorna l'indice più recente
+        return encoder_buffer_extended_index;
+    }
+    
+    if (diff_samples >= (int64_t)encoder_buffer_extended_total_samples) {
+        // Timestamp troppo vecchio - ritorna il campione più vecchio disponibile
+        if (encoder_buffer_extended_total_samples < ENCODER_BUFFER_EXTENDED_SIZE) {
+            return 0; // Buffer non ancora pieno
+        } else {
+            return (encoder_buffer_extended_index + 1) % ENCODER_BUFFER_EXTENDED_SIZE;
+        }
+    }
+    
+    // Calcola indice target nel buffer circolare
+    size_t samples_back = (size_t)diff_samples;
+    size_t target_index = (encoder_buffer_extended_index + ENCODER_BUFFER_EXTENDED_SIZE - samples_back) 
+                         % ENCODER_BUFFER_EXTENDED_SIZE;
+    
+    return target_index;
+}
+
+// Funzione per estrarre una finestra di campioni
+    static size_t extract_buffer_window(time_t center_timestamp, int duration_seconds,   // MODIFICA: era duration_minutes
+                                   EncoderDataExtended* output, size_t max_samples) {
+    if (encoder_buffer_extended == nullptr || output == nullptr || max_samples == 0) {
+        return 0;
+    }
+    
+// Calcola finestra temporale: [center - 1s] ... [center + duration*60s + 1s]
+    time_t start_timestamp = center_timestamp - 1;
+    time_t end_timestamp = center_timestamp + duration_seconds + 1;  // MODIFICA: era (duration_minutes * 60)
+    
+    // Calcola numero di campioni richiesti
+    int64_t window_seconds = end_timestamp - start_timestamp;
+    size_t window_samples = (size_t)(window_seconds * 10); // 10 campioni/sec
+    
+    // Limita ai campioni disponibili
+    if (window_samples > max_samples) {
+        window_samples = max_samples;
+    }
+    
+    // Trova indice di partenza (dal timestamp di inizio)
+    size_t start_index = find_buffer_index_by_timestamp(start_timestamp);
+    
+    // Estrai campioni con gestione wrap circolare
+    size_t extracted = 0;
+    for (size_t i = 0; i < window_samples && extracted < max_samples; i++) {
+        size_t buffer_index = (start_index + i) % ENCODER_BUFFER_EXTENDED_SIZE;
+        
+        // Verifica che il campione sia valido (non oltre i campioni totali)
+        if (encoder_buffer_extended_total_samples < ENCODER_BUFFER_EXTENDED_SIZE) {
+            // Buffer non ancora pieno
+            if (buffer_index >= encoder_buffer_extended_total_samples) {
+                break;
+            }
+        }
+        
+        output[extracted] = encoder_buffer_extended[buffer_index];
+        extracted++;
+    }
+    
+    ESP_LOGI("DOOR", "Estratti %zu campioni per finestra %ld-%ld (centro: %ld)", 
+             extracted, (long)start_timestamp, (long)end_timestamp, (long)center_timestamp);
+    
+    return extracted;
+}
+
+// Funzione helper per calcolare timestamp di un campione
+static time_t get_sample_timestamp(size_t sample_index) {
+    time_t now;
+    time(&now);
+    
+    // Calcola quanti campioni indietro rispetto ad ora
+    size_t current_index = encoder_buffer_extended_index;
+    size_t samples_back;
+    
+    if (sample_index <= current_index) {
+        samples_back = current_index - sample_index;
+    } else {
+        // Gestione wrap
+        samples_back = current_index + (ENCODER_BUFFER_EXTENDED_SIZE - sample_index);
+    }
+    
+    // Converti in secondi (1 campione = 0.1s)
+    time_t timestamp = now - (samples_back / 10);
+    
+    return timestamp;
+}
+
+extern "C" size_t get_buffer_window_for_timestamp(time_t center_timestamp, int duration_seconds,  // MODIFICA: era duration_minutes
+                                                  EncoderDataExtended* output, size_t max_samples,
+                                                  time_t* actual_start_timestamp) {
+    if (actual_start_timestamp) {
+        *actual_start_timestamp = center_timestamp - 1; // Inizia 1 secondo prima
+    }
+    
+    return extract_buffer_window(center_timestamp, duration_seconds, output, max_samples);  // MODIFICA: era duration_minutes
+}
+
 // =====================================
 // Main door task
 // =====================================
