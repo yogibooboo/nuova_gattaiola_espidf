@@ -22,18 +22,30 @@ class EventGraphModal {
             if (event.target === this.modal) this.close();
         };
         
-        // Control handlers
-        document.getElementById('prevEvent').onclick = () => this.navigateEvent(-1);
-        document.getElementById('nextEvent').onclick = () => this.navigateEvent(1);
-        document.getElementById('durationSelect').onchange = () => this.refreshData();
+        // Control handlers - NAVIGAZIONE CORRETTA (invertita)
+        document.getElementById('prevEvent').onclick = () => this.navigateEvent(1);   // Vai più indietro nella lista = più vecchio nel tempo
+        document.getElementById('nextEvent').onclick = () => this.navigateEvent(-1); // Vai più avanti nella lista = più recente nel tempo
+        
+        // Gestione bottoni durata
+        document.querySelectorAll('.btn-duration').forEach(btn => {
+            btn.onclick = () => {
+                // Rimuovi active da tutti i bottoni
+                document.querySelectorAll('.btn-duration').forEach(b => b.classList.remove('active'));
+                // Aggiungi active al bottone cliccato
+                btn.classList.add('active');
+                // Ricarica i dati con la nuova durata
+                this.refreshData();
+            };
+        });
+        
         document.getElementById('showDetails').onchange = () => this.updateChart();
         
         // Keyboard shortcuts
         document.addEventListener('keydown', (e) => {
             if (this.modal.style.display === 'block') {
                 if (e.key === 'Escape') this.close();
-                if (e.key === 'ArrowLeft') this.navigateEvent(-1);
-                if (e.key === 'ArrowRight') this.navigateEvent(1);
+                if (e.key === 'ArrowLeft') this.navigateEvent(1);   // Sinistra = più vecchio
+                if (e.key === 'ArrowRight') this.navigateEvent(-1); // Destra = più recente
             }
         });
     }
@@ -85,15 +97,16 @@ class EventGraphModal {
     }
     
     updateNavigationButtons() {
-        document.getElementById('prevEvent').disabled = this.currentEventIndex <= 0;
-        document.getElementById('nextEvent').disabled = this.currentEventIndex >= this.events.length - 1;
+        document.getElementById('prevEvent').disabled = this.currentEventIndex >= this.events.length - 1;
+        document.getElementById('nextEvent').disabled = this.currentEventIndex <= 0;
     }
     
     refreshData() {
         if (!this.currentEvent) return;
         
         this.showLoading(true);
-        const duration = document.getElementById('durationSelect').value;
+        // CAMBIA questa riga:
+        const duration = document.querySelector('.btn-duration.active')?.dataset.duration || '10';
         
         // Reset dati precedenti
         this.rawData = null;

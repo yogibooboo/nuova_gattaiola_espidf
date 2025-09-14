@@ -655,7 +655,6 @@ esp_err_t ws_handler(httpd_req_t *req) {
     buf_put_ws_frame(wbuf);
     return (ret == ESP_OK) ? ESP_OK : ret;
 }
-
 // =====================================
 // Wi-Fi events & init - Con funzioni di tracking diagnostico
 // =====================================
@@ -789,8 +788,8 @@ void setup_wifi(void) {
     wifi_reconnect_count = 0;
 
     ESP_LOGI(TAG, "Inizializzazione WiFi completata");
-    xTaskCreate(websocket_cleanup_task, "ws_cleanup", 2048, NULL, 1, NULL);
-    ESP_LOGI(TAG, "WebSocket cleanup task avviato");
+    //xTaskCreate(websocket_cleanup_task, "ws_cleanup", 2048, NULL, 1, NULL);
+    //ESP_LOGI(TAG, "WebSocket cleanup task avviato");
 
     ESP_LOGI(TAG, "Inizializzazione WiFi completata");
 }

@@ -92,18 +92,18 @@
         
         <div class="modal-controls">
             <div class="control-group">
-                <button class="btn-nav" id="prevEvent" title="Evento Precedente">‹</button>
-                <button class="btn-nav" id="nextEvent" title="Evento Successivo">›</button>
+                <button class="btn-nav" id="prevEvent" title="Evento Precedente (più vecchio)">‹</button>
+                <button class="btn-nav" id="nextEvent" title="Evento Successivo (più recente)">›</button>
             </div>
             
             <div class="control-group">
                 <label>Durata:</label>
-                <select id="durationSelect">
-                    <option value="10">10s</option>
-                    <option value="30" selected>30s</option>
-                    <option value="60">60s</option>
-                    <option value="120">120s</option>
-                </select>
+                <div class="duration-buttons">
+                    <button class="btn-duration active" data-duration="10">10s</button>
+                    <button class="btn-duration" data-duration="30">30s</button>
+                    <button class="btn-duration" data-duration="60">60s</button>
+                    <button class="btn-duration" data-duration="120">120s</button>
+                </div>
             </div>
             
             <div class="control-group">
@@ -255,9 +255,8 @@
                     if (event.data.startsWith("Mode updated")) {
                         console.log("Modalità aggiornata via WebSocket");
                         setTimeout(updateStatus, 500);
-                    }
-                    // AGGIUNGERE: Gestione metadati per il modal
-                    else {
+                    } else {
+                        // Gestione metadati per il modal
                         try {
                             const data = JSON.parse(event.data);
                             if (data.type === 'buffer_window_metadata' && window.eventGraphModal) {
@@ -268,11 +267,10 @@
                         }
                     }
                 } else if (event.data instanceof Blob && window.eventGraphModal) {
-                    // AGGIUNGERE: Gestione dati binari per il modal
+                    // Gestione dati binari per il modal
                     window.eventGraphModal.handleBinaryData(event.data);
                 }
             };
-
             window.ws.onclose = function() {
                 console.log("WebSocket disconnesso, riconnessione...");
                 setTimeout(initWebSocket, 5000);
@@ -310,6 +308,13 @@
             // Polling ogni 5 secondi
             setInterval(updateStatus, 5000);
         };
+        window.addEventListener('beforeunload', function(event) {
+            // Chiudi esplicitamente il WebSocket prima del reload/chiusura
+            if (window.ws && window.ws.readyState === WebSocket.OPEN) {
+                window.ws.close();
+                console.log("WebSocket chiuso manualmente prima del reload/chiusura");
+            }
+        });
     </script>
 </body>
 </html>
