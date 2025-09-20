@@ -210,6 +210,8 @@ esp_err_t ws_handler(httpd_req_t *req) {
         return ESP_FAIL;
     }
 
+
+
     // Primo passaggio: solo per conoscere la lunghezza
     httpd_ws_frame_t ws_pkt = {
         .final = true,
@@ -229,6 +231,16 @@ esp_err_t ws_handler(httpd_req_t *req) {
         // Forza cleanup se necessario
         websocket_cleanup_dead_connections();
         return ret;
+    
+    }
+
+        // Gestione frame di chiusura
+    if (ws_pkt.type == HTTPD_WS_TYPE_CLOSE) {
+        ESP_LOGI(TAG, "Ricevuto frame di chiusura WebSocket, fd=%d", client_fd);
+        unregister_ws_client(client_fd);
+        unregister_cli_client(client_fd);
+        websocket_cleanup_dead_connections();
+        return ESP_OK;
     }
 
     if (ws_pkt.len >= WS_FRAME_SIZE) { // >= per lasciare spazio a '\0'
