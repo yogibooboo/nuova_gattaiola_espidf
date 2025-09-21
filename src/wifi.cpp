@@ -34,12 +34,12 @@ static EXT_RAM_BSS_ATTR EncoderData temp_encoder_buffer[ENCODER_BUFFER_SIZE] __a
 
 // Gestione client WebSocket per broadcast
 #define MAX_WS_CLIENTS 4
-static int g_ws_client_fds[MAX_WS_CLIENTS];
+static int g_ws_client_fds[MAX_WS_CLIENTS] = {-1, -1, -1, -1}; // Inizializza a -1
 static int g_ws_client_count = 0;
 
 // Gestione client WebSocket per CLI diagnostico
 #define MAX_CLI_CLIENTS 2
-static int g_cli_client_fds[MAX_CLI_CLIENTS];
+static int g_cli_client_fds[MAX_CLI_CLIENTS] = {-1, -1}; // Inizializza a -1
 static int g_cli_client_count = 0;
 
 // Buffer per cattura output CLI - RIPRISTINATO SISTEMA ORIGINALE
@@ -56,17 +56,25 @@ void register_ws_client(int fd) {
     }
 }
 
-void unregister_ws_client(int fd) {
-    for (int i = 0; i < g_ws_client_count; i++) {
+static int find_ws_client_by_fd(int fd) {
+    for (int i = 0; i < MAX_WS_CLIENTS; i++) {
         if (g_ws_client_fds[i] == fd) {
-            // Sposta gli elementi rimanenti
-            for (int j = i; j < g_ws_client_count - 1; j++) {
-                g_ws_client_fds[j] = g_ws_client_fds[j + 1];
-            }
-            g_ws_client_count--;
-            ESP_LOGI(TAG, "Client WS rimosso, totale: %d", g_ws_client_count);
-            break;
+            return i;
         }
+    }
+    return -1;
+}
+void unregister_ws_client(int fd) {
+    int i = find_ws_client_by_fd(fd);
+    if (i != -1) {
+        ESP_LOGI(TAG, "Tentativo di rimozione WS, fd=%d, count=%d", fd, g_ws_client_count);
+        g_ws_client_fds[i] = -1;
+        g_ws_client_count--;
+        
+        // La chiusura del socket non è più gestita qui per evitare conflitti.
+        // Lascia che sia il server httpd a gestire la chiusura del socket.
+        
+        ESP_LOGI(TAG, "Client WS rimosso, fd=%d, totale: %d", fd, g_ws_client_count);
     }
 }
 
@@ -80,14 +88,20 @@ void register_cli_client(int fd) {
 }
 
 void unregister_cli_client(int fd) {
+    if (fd < 0) return; // Ignora fd non validi
+    ESP_LOGI(TAG, "Tentativo di rimozione CLI, fd=%d, count=%d", fd, g_cli_client_count);
     for (int i = 0; i < g_cli_client_count; i++) {
         if (g_cli_client_fds[i] == fd) {
-            // Sposta gli elementi rimanenti
             for (int j = i; j < g_cli_client_count - 1; j++) {
                 g_cli_client_fds[j] = g_cli_client_fds[j + 1];
             }
+            g_cli_client_fds[g_cli_client_count - 1] = -1; // Pulisce l'ultimo elemento
             g_cli_client_count--;
-            ESP_LOGI(TAG, "Client CLI rimosso, totale: %d", g_cli_client_count);
+            struct linger linger = { .l_onoff = 1, .l_linger = 0 }; // Chiusura immediata
+            setsockopt(fd, SOL_SOCKET, SO_LINGER, &linger, sizeof(linger));
+            shutdown(fd, SHUT_RDWR); // Arresta il socket
+            close(fd); // Chiusura del socket
+            ESP_LOGI(TAG, "Client CLI rimosso, fd=%d, totale: %d", fd, g_cli_client_count);
             break;
         }
     }
@@ -156,28 +170,38 @@ static const char* get_captured_output() {
 }
 
 
-// 3. AGGIUNGI questa funzione di cleanup periodico
-static void websocket_cleanup_dead_connections(void) {
-    // Cleanup client WS
-    for (int i = g_ws_client_count - 1; i >= 0; i--) {
-        int fd = g_ws_client_fds[i];
-        if (!is_socket_valid(fd)) {
-            ESP_LOGW(TAG, "Cleanup WebSocket morto fd=%d (indice %d)", fd, i);
-            unregister_ws_client(fd);
+void websocket_cleanup_dead_connections(void) {
+    for (int i = 0; i < g_ws_client_count; i++) {
+        if (g_ws_client_fds[i] >= 0 && !is_socket_valid(g_ws_client_fds[i])) {
+            ESP_LOGW(TAG, "Rilevato socket WS non valido, fd=%d", g_ws_client_fds[i]);
+            struct linger linger = { .l_onoff = 1, .l_linger = 0 }; // Chiusura immediata
+            setsockopt(g_ws_client_fds[i], SOL_SOCKET, SO_LINGER, &linger, sizeof(linger));
+            shutdown(g_ws_client_fds[i], SHUT_RDWR);
+            close(g_ws_client_fds[i]);
+            g_ws_client_fds[i] = -1;
+            for (int j = i; j < g_ws_client_count - 1; j++) {
+                g_ws_client_fds[j] = g_ws_client_fds[j + 1];
+            }
+            g_ws_client_count--;
+            i--;
         }
     }
-    
-    // Cleanup client CLI
-    for (int i = g_cli_client_count - 1; i >= 0; i--) {
-        int fd = g_cli_client_fds[i];
-        if (!is_socket_valid(fd)) {
-            ESP_LOGW(TAG, "Cleanup CLI WebSocket morto fd=%d (indice %d)", fd, i);
-            unregister_cli_client(fd);
+    for (int i = 0; i < g_cli_client_count; i++) {
+        if (g_cli_client_fds[i] >= 0 && !is_socket_valid(g_cli_client_fds[i])) {
+            ESP_LOGW(TAG, "Rilevato socket CLI non valido, fd=%d", g_cli_client_fds[i]);
+            struct linger linger = { .l_onoff = 1, .l_linger = 0 }; // Chiusura immediata
+            setsockopt(g_cli_client_fds[i], SOL_SOCKET, SO_LINGER, &linger, sizeof(linger));
+            shutdown(g_cli_client_fds[i], SHUT_RDWR);
+            close(g_cli_client_fds[i]);
+            g_cli_client_fds[i] = -1;
+            for (int j = i; j < g_cli_client_count - 1; j++) {
+                g_cli_client_fds[j] = g_cli_client_fds[j + 1];
+            }
+            g_cli_client_count--;
+            i--;
         }
     }
-    
-    ESP_LOGI(TAG, "Cleanup completato: %d client WS, %d client CLI", 
-             g_ws_client_count, g_cli_client_count);
+    ESP_LOGI(TAG, "Cleanup completato: %d client WS, %d client CLI", g_ws_client_count, g_cli_client_count);
 }
 
 // 4. AGGIUNGI questo task (inseriscilo dopo le funzioni esistenti, prima di ws_handler)
@@ -195,18 +219,26 @@ static void websocket_cleanup_task(void *pvParameters) {
 // =====================================
 
 esp_err_t ws_handler(httpd_req_t *req) {
+    ESP_LOGI(TAG, "File descriptor attivi: ws=%d, cli=%d", g_ws_client_count, g_cli_client_count);
     if (req->method == HTTP_GET) {
         ESP_LOGI(TAG, "Handshake WebSocket completato");
-        register_ws_client(httpd_req_to_sockfd(req));
+        int fd = httpd_req_to_sockfd(req);
+        if (fd >= 0 && is_socket_valid(fd)) {
+            register_ws_client(fd);
+        } else {
+            ESP_LOGW(TAG, "Socket invalido durante handshake, fd=%d", fd);
+            return ESP_FAIL;
+        }
         return ESP_OK;
     }
-
-    // AGGIUNTO: Verifica validità connessione prima di processare
     int client_fd = httpd_req_to_sockfd(req);
-    if (!is_socket_valid(client_fd)) {
-        ESP_LOGW(TAG, "Socket invalido rilevato durante ws_handler, cleanup fd=%d", client_fd);
-        unregister_ws_client(client_fd);
-        unregister_cli_client(client_fd);
+    if (client_fd < 0 || !is_socket_valid(client_fd)) {
+        ESP_LOGW(TAG, "Socket invalido rilevato durante ws_handler, fd=%d", client_fd);
+        if (client_fd >= 0) {
+            unregister_ws_client(client_fd);
+            unregister_cli_client(client_fd);
+            websocket_cleanup_dead_connections();
+        }
         return ESP_FAIL;
     }
 
@@ -665,6 +697,7 @@ esp_err_t ws_handler(httpd_req_t *req) {
     ret = httpd_ws_send_frame(req, &resp_pkt);
 
     buf_put_ws_frame(wbuf);
+    ESP_LOGI(TAG, "File descriptor attivi: ws=%d, cli=%d", g_ws_client_count, g_cli_client_count);
     return (ret == ESP_OK) ? ESP_OK : ret;
 }
 // =====================================
