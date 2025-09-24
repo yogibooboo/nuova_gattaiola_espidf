@@ -20,6 +20,10 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <sys/stat.h>
+
+#define MAX_FD_INFO_LENGTH 256
+
 
 void start_webserver_if_not_running(void);
 void stop_webserver(void);
@@ -90,17 +94,20 @@ void register_cli_client(int fd) {
 void unregister_cli_client(int fd) {
     if (fd < 0) return; // Ignora fd non validi
     ESP_LOGI(TAG, "Tentativo di rimozione CLI, fd=%d, count=%d", fd, g_cli_client_count);
+    
+    // Cerca il file descriptor nella lista
     for (int i = 0; i < g_cli_client_count; i++) {
         if (g_cli_client_fds[i] == fd) {
+            // Rimuovi l'elemento dalla lista spostando gli elementi successivi
             for (int j = i; j < g_cli_client_count - 1; j++) {
                 g_cli_client_fds[j] = g_cli_client_fds[j + 1];
             }
             g_cli_client_fds[g_cli_client_count - 1] = -1; // Pulisce l'ultimo elemento
             g_cli_client_count--;
-            struct linger linger = { .l_onoff = 1, .l_linger = 0 }; // Chiusura immediata
-            setsockopt(fd, SOL_SOCKET, SO_LINGER, &linger, sizeof(linger));
-            shutdown(fd, SHUT_RDWR); // Arresta il socket
-            close(fd); // Chiusura del socket
+            
+            // Le chiamate per la chiusura del socket sono state rimosse.
+            // Lascia che sia il server a gestirne la chiusura.
+            
             ESP_LOGI(TAG, "Client CLI rimosso, fd=%d, totale: %d", fd, g_cli_client_count);
             break;
         }
@@ -965,6 +972,14 @@ extern "C" void get_wifi_status(char* buffer, size_t buffer_size, const char* su
                 default: disconnect_reason = "Altro"; break;
             }
         }
+        int active_fds = 0;
+        for (int fd = 0; fd < 20; fd++) { // Limite configurato a 20
+            // Su ESP-IDF, un FD è valido se fstat() non restituisce errore
+            struct stat fd_stat;
+            if (fstat(fd, &fd_stat) == 0) {
+                active_fds++;
+            }
+        }
         
         snprintf(buffer, buffer_size,
             "=== STATO WIFI ===\n"
@@ -982,17 +997,17 @@ extern "C" void get_wifi_status(char* buffer, size_t buffer_size, const char* su
             "SEGNALE:\n"
             "  RSSI: %d dBm (%d%%, %d barre)\n"
             "\n"
-            "STATISTICHE:\n"
-            "  Riconnessioni: %lu  |  Disconnessioni tot: %lu\n"
-            "\n"
-            "ULTIMA DISCONNESSIONE:\n"
-            "  Motivo: %s  |  Quando: %s\n"
+            "RISORSE SISTEMA:\n"
+            "  File descriptor attivi: %d/20\n"
             "\n"
             "WEBSOCKET:\n"
             "  Client WS: %d  |  Client CLI: %d\n"
             "\n"
-            "DEBUG TEMPI:\n"
-            "  Timestamp ora: %ld  |  Conn start: %ld\n",
+            "STATISTICHE:\n"
+            "  Riconnessioni: %lu  |  Disconnessioni tot: %lu\n"
+            "\n"
+            "ULTIMA DISCONNESSIONE:\n"
+            "  Motivo: %s  |  Quando: %s\n",
             
             time_str,
             WIFI_SSID, mac_str,
@@ -1001,10 +1016,10 @@ extern "C" void get_wifi_status(char* buffer, size_t buffer_size, const char* su
             ip_str, gw_str,
             mask_str,
             current_rssi, rssi_percent, rssi_bars,
-            (unsigned long)wifi_reconnect_count, (unsigned long)total_disconnect_count,
-            disconnect_reason, disconnect_time_str,
+            active_fds,
             g_ws_client_count, g_cli_client_count,
-            (long)now, (long)connection_start_time  // DEBUG INFO
+            (unsigned long)wifi_reconnect_count, (unsigned long)total_disconnect_count,
+            disconnect_reason, disconnect_time_str
         );
     } else if (strcmp(subcommand, "scan") == 0) {
         // Subcomando per scan reti
