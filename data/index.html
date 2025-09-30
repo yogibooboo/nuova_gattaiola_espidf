@@ -83,6 +83,8 @@
 </head>
 
 <!-- Modal HTML Structure -->
+
+
 <div id="eventModal" class="modal">
     <div class="modal-content">
         <div class="modal-header">
@@ -105,17 +107,12 @@
                     <button class="btn-duration" data-duration="120">120s</button>
                 </div>
             </div>
-            
-            <div class="control-group">
-                <label>Mostra:</label>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="showDetails" checked>
-                    <span class="slider"></span>
-                </label>
-                <span>Dettagli</span>
+
+            <div class="control-group" id="legendToggleGroup">
+                <button class="btn-secondary" id="toggleLegend">Mostra Legenda</button>
             </div>
         </div>
-        
+
         <div class="chart-container">
             <div class="loading-overlay" id="loadingOverlay">
                 Caricamento dati...
@@ -127,7 +124,7 @@
             Pronto per visualizzare l'evento
         </div>
     </div>
-</div>
+</div>>
 
 <body>
     <div class="container">

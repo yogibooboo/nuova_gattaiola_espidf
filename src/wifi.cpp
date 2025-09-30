@@ -214,8 +214,45 @@ void websocket_cleanup_dead_connections(void) {
 // 4. AGGIUNGI questo task (inseriscilo dopo le funzioni esistenti, prima di ws_handler)
 static void websocket_cleanup_task(void *pvParameters) {
     while (1) {
-        vTaskDelay(pdMS_TO_TICKS(15000)); // Ogni 15 secondi
-        websocket_cleanup_dead_connections();
+        vTaskDelay(pdMS_TO_TICKS(1800000)); // Ogni 30 minuti
+
+        // Controlla i client WS uno alla volta con delay per evitare watchdog
+        for (int i = 0; i < g_ws_client_count; i++) {
+            if (g_ws_client_fds[i] >= 0 && !is_socket_valid(g_ws_client_fds[i])) {
+                ESP_LOGW(TAG, "Rilevato socket WS non valido, fd=%d", g_ws_client_fds[i]);
+                struct linger linger = { .l_onoff = 1, .l_linger = 0 };
+                setsockopt(g_ws_client_fds[i], SOL_SOCKET, SO_LINGER, &linger, sizeof(linger));
+                shutdown(g_ws_client_fds[i], SHUT_RDWR);
+                close(g_ws_client_fds[i]);
+                g_ws_client_fds[i] = -1;
+                for (int j = i; j < g_ws_client_count - 1; j++) {
+                    g_ws_client_fds[j] = g_ws_client_fds[j + 1];
+                }
+                g_ws_client_count--;
+                i--;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100)); // 100ms tra un controllo e l'altro
+        }
+
+        // Controlla i client CLI uno alla volta con delay per evitare watchdog
+        for (int i = 0; i < g_cli_client_count; i++) {
+            if (g_cli_client_fds[i] >= 0 && !is_socket_valid(g_cli_client_fds[i])) {
+                ESP_LOGW(TAG, "Rilevato socket CLI non valido, fd=%d", g_cli_client_fds[i]);
+                struct linger linger = { .l_onoff = 1, .l_linger = 0 };
+                setsockopt(g_cli_client_fds[i], SOL_SOCKET, SO_LINGER, &linger, sizeof(linger));
+                shutdown(g_cli_client_fds[i], SHUT_RDWR);
+                close(g_cli_client_fds[i]);
+                g_cli_client_fds[i] = -1;
+                for (int j = i; j < g_cli_client_count - 1; j++) {
+                    g_cli_client_fds[j] = g_cli_client_fds[j + 1];
+                }
+                g_cli_client_count--;
+                i--;
+            }
+            vTaskDelay(pdMS_TO_TICKS(100)); // 100ms tra un controllo e l'altro
+        }
+
+        ESP_LOGI(TAG, "Cleanup periodico completato: %d client WS, %d client CLI", g_ws_client_count, g_cli_client_count);
     }
 }
 
@@ -840,10 +877,8 @@ void setup_wifi(void) {
     wifi_reconnect_count = 0;
 
     ESP_LOGI(TAG, "Inizializzazione WiFi completata");
-    //xTaskCreate(websocket_cleanup_task, "ws_cleanup", 2048, NULL, 1, NULL);
-    //ESP_LOGI(TAG, "WebSocket cleanup task avviato");
-
-    ESP_LOGI(TAG, "Inizializzazione WiFi completata");
+    xTaskCreate(websocket_cleanup_task, "ws_cleanup", 3072, NULL, 1, NULL);
+    ESP_LOGI(TAG, "WebSocket cleanup task avviato (ogni 30 minuti)");
 }
 
 // wifi_utils.cpp - File incluso in wifi.cpp

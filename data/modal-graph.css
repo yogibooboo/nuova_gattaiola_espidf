@@ -1,5 +1,5 @@
 /* =====================================
-Salva questo contenuto in /data/modal-graph.css
+modal-graph.css - Versione ottimizzata per landscape mobile
 ===================================== */
 
 /* Modal styles - responsive e mobile-friendly */
@@ -160,8 +160,141 @@ Salva questo contenuto in /data/modal-graph.css
     margin-top: 10px;
 }
 
-/* Mobile optimizations */
-@media (max-width: 768px) {
+.duration-buttons {
+    display: flex;
+    gap: 5px;
+}
+
+.btn-duration {
+    padding: 6px 12px;
+    border: 1px solid #ccc;
+    background: white;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.btn-duration.active {
+    background: #3498db;
+    color: white;
+    border-color: #2980b9;
+}
+
+/* Pulsante toggle legenda - nascosto di default */
+#legendToggleGroup {
+    display: none;
+}
+
+/* Stili per index.html - righe cliccabili */
+.log-entry-clickable {
+    transition: background-color 0.2s ease;
+}
+
+.log-entry-clickable:hover {
+    background-color: #f0f8ff !important;
+    transform: translateY(-1px);
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.log-table {
+    position: relative;
+}
+
+.log-table tbody tr {
+    position: relative;
+}
+
+.log-entry-clickable::after {
+    content: "📊";
+    position: absolute;
+    right: 10px;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    font-size: 12px;
+}
+
+.log-entry-clickable:hover::after {
+    opacity: 0.7;
+}
+
+/* ===================================== 
+   LANDSCAPE MOBILE OPTIMIZATION 
+   ===================================== */
+@media (max-width: 768px) and (orientation: landscape) {
+    .modal-content {
+        margin: 1% auto;
+        width: 98%;
+        height: 98%;
+        padding: 10px;
+    }
+
+    .modal-header {
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+    }
+
+    .modal-title {
+        font-size: 1.1em;
+    }
+
+    .close {
+        font-size: 24px;
+        width: 30px;
+        height: 30px;
+    }
+
+    /* Controlli su una sola riga */
+    .modal-controls {
+        flex-wrap: nowrap;
+        gap: 8px;
+        margin-bottom: 8px;
+        justify-content: center;
+    }
+
+    .control-group {
+        gap: 4px;
+    }
+
+    .control-group label {
+        display: none; /* Nascondi label "Durata:" per risparmiare spazio */
+    }
+
+    .btn-nav {
+        padding: 6px 10px;
+        font-size: 14px;
+        min-width: 35px;
+    }
+
+    .btn-duration {
+        padding: 6px 10px;
+        font-size: 12px;
+    }
+
+    /* Nascondi status-info in landscape */
+    .status-info {
+        display: none;
+    }
+
+    /* Chart container ottimizzato */
+    .chart-container {
+        min-height: 200px;
+        padding: 5px;
+    }
+
+    /* Forza la legenda in alto a destra in landscape */
+    .chart-container canvas {
+        display: block;
+    }
+
+    /* Mostra pulsante toggle legenda solo in landscape */
+    #legendToggleGroup {
+        display: flex;
+    }
+}
+
+/* ===================================== 
+   PORTRAIT MOBILE 
+   ===================================== */
+@media (max-width: 768px) and (orientation: portrait) {
     .modal-content {
         margin: 1% auto;
         width: 98%;
@@ -191,9 +324,18 @@ Salva questo contenuto in /data/modal-graph.css
         padding: 12px;
         font-size: 16px;
     }
+
+    /* Touch target più grandi per le righe della tabella */
+    .log-entry-clickable {
+        min-height: 48px;
+    }
+    
+    .log-entry-clickable td {
+        padding: 12px 8px;
+    }
 }
 
-/* Toggle switches per mobile */
+/* Toggle switches (non più usato ma lasciato per compatibilità) */
 .toggle-switch {
     position: relative;
     display: inline-block;
@@ -237,69 +379,4 @@ input:checked + .slider {
 
 input:checked + .slider:before {
     transform: translateX(26px);
-}
-
-/* Stili aggiuntivi per index.html - aggiungi al CSS esistente */
-.log-entry-clickable {
-    transition: background-color 0.2s ease;
-}
-
-.log-entry-clickable:hover {
-    background-color: #f0f8ff !important;
-    transform: translateY(-1px);
-    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-}
-
-.log-table {
-    /* Modifica esistente per permettere hover effects */
-    position: relative;
-}
-
-.log-table tbody tr {
-    /* Assicura che le righe siano cliccabili */
-    position: relative;
-}
-
-/* Indicatore visivo che la riga è cliccabile */
-.log-entry-clickable::after {
-    content: "📊";
-    position: absolute;
-    right: 10px;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-    font-size: 12px;
-}
-
-.log-entry-clickable:hover::after {
-    opacity: 0.7;
-}
-
-/* Mobile: rendi i touch target più grandi */
-@media (max-width: 600px) {
-    .log-entry-clickable {
-        min-height: 48px; /* Minimum touch target size */
-    }
-    
-    .log-entry-clickable td {
-        padding: 12px 8px; /* Increased padding for mobile */
-    }
-}
-
-.duration-buttons {
-    display: flex;
-    gap: 5px;
-}
-
-.btn-duration {
-    padding: 6px 12px;
-    border: 1px solid #ccc;
-    background: white;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.btn-duration.active {
-    background: #3498db;
-    color: white;
-    border-color: #2980b9;
 }
