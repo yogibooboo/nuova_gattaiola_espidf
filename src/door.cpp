@@ -787,7 +787,6 @@ extern "C" void door_task(void *pv) {
             gpio_set_level(DETECTED, LED_ON);
             detect = true;
             is_authorized = false;
-            strcpy(cat_name_evento, "Sconosciuto");
             country_code = last_country_code;
             device_code = last_device_code;
 
