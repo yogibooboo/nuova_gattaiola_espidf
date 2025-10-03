@@ -63,9 +63,6 @@ static bool vl6180x_i2c_initialized = false;
 // Variabile globale per distanza VL6180X (esportata)
 volatile uint8_t lastDistance = 255;  // Default 255 = errore/non inizializzato
 
-// Variabile per inversione servo (letta all'avvio da GPIO28)
-static bool servo_inverted = false;
-
 // =====================================
 // Inizializzazione Buffer Esteso PSRAM
 // =====================================
@@ -397,11 +394,6 @@ static void setServoPosition(bool open) {
     static uint32_t current_servo_us = 0;
     if (current_servo_us == 0) current_servo_us = config.servo_closed_us;
 
-    // Inverti logica se jumper GPIO28 è a LOW
-    if (servo_inverted) {
-        open = !open;
-    }
-
     uint32_t target_us = open ? config.servo_open_us : config.servo_closed_us;
     int32_t delta_us = (int32_t)target_us - (int32_t)current_servo_us;
     if (delta_us == 0) return;
@@ -501,19 +493,6 @@ static void door_gpio_init_once(void) {
     io.pull_up_en = GPIO_PULLUP_ENABLE;
     io.intr_type = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io));
-
-    // Jumper inversione servo
-    io.pin_bit_mask = 1ULL << SERVO_INVERT_PIN;
-    io.mode = GPIO_MODE_INPUT;
-    io.pull_up_en = GPIO_PULLUP_ENABLE;
-    io.intr_type = GPIO_INTR_DISABLE;
-    ESP_ERROR_CHECK(gpio_config(&io));
-
-    // Leggi stato inversione servo (LOW = inverti)
-    servo_inverted = !gpio_get_level(SERVO_INVERT_PIN);
-    ESP_LOGI(TAG, "Servo inversione: %s (GPIO28=%d)",
-             servo_inverted ? "ABILITATA" : "NORMALE",
-             gpio_get_level(SERVO_INVERT_PIN));
 }
 
 // Funzione diagnostica per comando "door"

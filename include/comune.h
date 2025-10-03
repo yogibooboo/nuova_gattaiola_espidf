@@ -31,7 +31,6 @@
 #define INFRARED         GPIO_NUM_3   // Sensore infrarosso della gattaiola
 #define INFRARED_ENABLE  GPIO_NUM_8      // Abilitazione sensore infrarosso
 #define SERVO_PIN        GPIO_NUM_12    //Uscita pwm servomotore
-#define SERVO_INVERT_PIN GPIO_NUM_28    //Jumper inversione servo (LOW=inverti, HIGH=normale)
 
 #define ENCODER_SDA      GPIO_NUM_10
 #define ENCODER_SCL      GPIO_NUM_9
