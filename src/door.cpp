@@ -58,6 +58,13 @@ static unsigned long last_unauthorized_log = 0;
 
 // Aggiungi questa variabile globale dopo le altre variabili globali in door.cpp:
 static bool encoder_i2c_initialized = false;
+static bool vl6180x_i2c_initialized = false;
+
+// Variabile globale per distanza VL6180X (esportata)
+volatile uint8_t lastDistance = 255;  // Default 255 = errore/non inizializzato
+
+// Variabile per inversione servo (letta all'avvio da GPIO28)
+static bool servo_inverted = false;
 
 // =====================================
 // Inizializzazione Buffer Esteso PSRAM
@@ -82,10 +89,16 @@ static esp_err_t init_extended_buffer(void) {
         ESP_LOGE(TAG, "ERRORE: Impossibile allocare %.1f MB in PSRAM", buffer_mb);
         return ESP_ERR_NO_MEM;
     }
-    
-    // Inizializza il buffer a zero
-    memset(encoder_buffer_extended, 0, buffer_size);
-    
+
+    // Inizializza il buffer a zero a blocchi per evitare watchdog
+    const size_t chunk_size = 65536;  // 64KB per blocco
+    uint8_t* ptr = (uint8_t*)encoder_buffer_extended;
+    for (size_t offset = 0; offset < buffer_size; offset += chunk_size) {
+        size_t bytes_to_clear = (offset + chunk_size > buffer_size) ? (buffer_size - offset) : chunk_size;
+        memset(ptr + offset, 0, bytes_to_clear);
+        vTaskDelay(1);  // Yield ogni 64KB per non bloccare watchdog
+    }
+
     ESP_LOGI(TAG, "Buffer esteso: %.1f MB allocati in PSRAM", buffer_mb);
     ESP_LOGI(TAG, "Indirizzo buffer esteso: %p", encoder_buffer_extended);
     
@@ -95,88 +108,249 @@ static esp_err_t init_extended_buffer(void) {
 // =====================================
 // Encoder placeholder
 // =====================================
-static uint16_t encoder_readAngle(void) {
-    // Ora legge dall'AS5600 invece di restituire valore fisso
-    uint8_t msb, lsb;
-    uint16_t angle = 2000; // Valore di default in caso di errore
-    
-    // Leggi MSB (bits 11:8)
+// Lettura ottimizzata AS5600: angle + magnitude in burst (4 byte totali)
+static void encoder_readAngleAndMagnitude(uint16_t* angle, uint16_t* magnitude) {
+    uint8_t data[4];
+    *angle = 2000;      // Valori di default in caso di errore
+    *magnitude = 2100;
+
+    // Leggi 4 byte consecutivi in burst: ANGLE_MSB(0x0E), ANGLE_LSB(0x0F), poi skippa fino a MAGNITUDE_MSB(0x1B), MAGNITUDE_LSB(0x1C)
+    // Soluzione: leggi prima angle, poi magnitude separatamente ma in modo ottimizzato
+
+    // Burst read angle (2 byte: MSB + LSB)
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write_byte(cmd, 0x0E, true); // AS5600_ANGLE_MSB_REG
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
-    i2c_master_read_byte(cmd, &msb, I2C_MASTER_NACK);
+    i2c_master_read(cmd, data, 2, I2C_MASTER_LAST_NACK); // Leggi 2 byte in sequenza
     i2c_master_stop(cmd);
-    
-    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    
-    if (ret != ESP_OK) return angle;
-    
-    // Leggi LSB (bits 7:0)
-    cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, 0x0F, true); // AS5600_ANGLE_LSB_REG
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
-    i2c_master_read_byte(cmd, &lsb, I2C_MASTER_NACK);
-    i2c_master_stop(cmd);
-    
-    ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
-    i2c_cmd_link_delete(cmd);
-    
-    if (ret != ESP_OK) return angle;
-    
-    // Combina MSB e LSB
-    angle = ((uint16_t)(msb & 0x0F) << 8) | lsb;
-    angle &= 0x0FFF; // Limita a 12-bit
-    
-    return angle;
-}
 
-static uint16_t encoder_readMagnitude(void) {
-    // Ora legge dall'AS5600 invece di restituire valore fisso
-    uint8_t msb, lsb;
-    uint16_t magnitude = 2100; // Valore di default
-    
-    // Leggi MSB magnitude
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(cmd);
+
+    if (ret == ESP_OK) {
+        *angle = ((uint16_t)(data[0] & 0x0F) << 8) | data[1];
+        *angle &= 0x0FFF;
+    }
+
+    // Burst read magnitude (2 byte: MSB + LSB)
+    cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
     i2c_master_write_byte(cmd, 0x1B, true); // AS5600_MAGNITUDE_MSB
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
-    i2c_master_read_byte(cmd, &msb, I2C_MASTER_NACK);
+    i2c_master_read(cmd, &data[2], 2, I2C_MASTER_LAST_NACK); // Leggi 2 byte in sequenza
     i2c_master_stop(cmd);
-    
-    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+
+    ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(cmd);
-    
-    if (ret != ESP_OK) return magnitude;
-    
-    // Leggi LSB magnitude
+
+    if (ret == ESP_OK) {
+        *magnitude = ((uint16_t)(data[2] & 0x0F) << 8) | data[3];
+        *magnitude &= 0x0FFF;
+    }
+}
+
+// =====================================
+// VL6180X Time-of-Flight Distance Sensor
+// =====================================
+#define VL6180X_ADDRESS 0x29
+
+// Registri VL6180X principali
+#define VL6180X_SYSTEM_FRESH_OUT_OF_RESET   0x0016
+#define VL6180X_SYSRANGE_START              0x0018
+#define VL6180X_RESULT_RANGE_STATUS         0x004D
+#define VL6180X_RESULT_RANGE_VAL            0x0062
+
+// Helper per scrivere registro VL6180X (16-bit address)
+static esp_err_t vl6180x_write_reg(uint16_t reg, uint8_t value) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, (reg >> 8) & 0xFF, true);  // MSB
+    i2c_master_write_byte(cmd, reg & 0xFF, true);          // LSB
+    i2c_master_write_byte(cmd, value, true);
+    i2c_master_stop(cmd);
+
+    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_1, cmd, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(cmd);
+    return ret;
+}
+
+// Helper per leggere registro VL6180X (16-bit address)
+static esp_err_t vl6180x_read_reg(uint16_t reg, uint8_t* value) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, (reg >> 8) & 0xFF, true);
+    i2c_master_write_byte(cmd, reg & 0xFF, true);
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, value, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+
+    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_1, cmd, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(cmd);
+    return ret;
+}
+
+// Inizializzazione completa VL6180X con configurazione raccomandata
+static esp_err_t vl6180x_init(void) {
+    uint8_t reset_status;
+
+    // Leggi stato reset
+    esp_err_t ret = vl6180x_read_reg(VL6180X_SYSTEM_FRESH_OUT_OF_RESET, &reset_status);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "VL6180X: Errore lettura reset status");
+        return ret;
+    }
+
+    ESP_LOGI(TAG, "VL6180X: Reset status iniziale = 0x%02X", reset_status);
+
+    // Se NON è fresh out of reset, forza un soft reset
+    if (reset_status != 0x01) {
+        ESP_LOGW(TAG, "VL6180X: Sensore non fresh, applico soft reset...");
+
+        // Soft reset: scrivi 0x01 al registro FRESH_OUT_OF_RESET
+        vl6180x_write_reg(VL6180X_SYSTEM_FRESH_OUT_OF_RESET, 0x01);
+        vTaskDelay(pdMS_TO_TICKS(10));  // Attendi stabilizzazione
+
+        // Rileggi per conferma
+        ret = vl6180x_read_reg(VL6180X_SYSTEM_FRESH_OUT_OF_RESET, &reset_status);
+        ESP_LOGI(TAG, "VL6180X: Reset status dopo soft reset = 0x%02X", reset_status);
+    }
+
+    // Applica sempre la configurazione completa
+    ESP_LOGI(TAG, "VL6180X: Applicazione configurazione raccomandata ST...");
+
+    // Configurazione raccomandata da ST per ranging
+    vl6180x_write_reg(0x0207, 0x01);
+    vl6180x_write_reg(0x0208, 0x01);
+    vl6180x_write_reg(0x0096, 0x00);
+    vl6180x_write_reg(0x0097, 0xfd);
+    vl6180x_write_reg(0x00e3, 0x00);
+    vl6180x_write_reg(0x00e4, 0x04);
+    vl6180x_write_reg(0x00e5, 0x02);
+    vl6180x_write_reg(0x00e6, 0x01);
+    vl6180x_write_reg(0x00e7, 0x03);
+    vl6180x_write_reg(0x00f5, 0x02);
+    vl6180x_write_reg(0x00d9, 0x05);
+    vl6180x_write_reg(0x00db, 0xce);
+    vl6180x_write_reg(0x00dc, 0x03);
+    vl6180x_write_reg(0x00dd, 0xf8);
+    vl6180x_write_reg(0x009f, 0x00);
+    vl6180x_write_reg(0x00a3, 0x3c);
+    vl6180x_write_reg(0x00b7, 0x00);
+    vl6180x_write_reg(0x00bb, 0x3c);
+    vl6180x_write_reg(0x00b2, 0x09);
+    vl6180x_write_reg(0x00ca, 0x09);
+    vl6180x_write_reg(0x0198, 0x01);
+    vl6180x_write_reg(0x01b0, 0x17);
+    vl6180x_write_reg(0x01ad, 0x00);
+    vl6180x_write_reg(0x00ff, 0x05);
+    vl6180x_write_reg(0x0100, 0x05);
+    vl6180x_write_reg(0x0199, 0x05);
+    vl6180x_write_reg(0x01a6, 0x1b);
+    vl6180x_write_reg(0x01ac, 0x3e);
+    vl6180x_write_reg(0x01a7, 0x1f);
+    vl6180x_write_reg(0x0030, 0x00);
+
+    // Configurazione range: convergence time e inter-measurement period
+    vl6180x_write_reg(0x001b, 0x09);  // Convergence time (30ms)
+    vl6180x_write_reg(0x003e, 0x31);  // Range check enables
+    vl6180x_write_reg(0x0014, 0x24);  // Early convergence estimate
+
+    // Azzera offset hardware (usiamo config.config_06 per calibrazione software)
+    vl6180x_write_reg(0x0024, 0x00);  // SYSRANGE__PART_TO_PART_RANGE_OFFSET
+
+    // Clear fresh out of reset
+    vl6180x_write_reg(VL6180X_SYSTEM_FRESH_OUT_OF_RESET, 0x00);
+
+    ESP_LOGI(TAG, "VL6180X: Configurazione completata");
+    return ESP_OK;
+}
+
+// Lettura distanza VL6180X (non bloccante - ritorna ultimo valore disponibile)
+static uint8_t vl6180x_readDistance(void) {
+    static uint8_t last_valid_distance = 255;
+    static bool measurement_started = false;
+    uint8_t distance = 255;
+
+    if (!measurement_started) {
+        // Avvia misura single-shot
+        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_write_byte(cmd, (VL6180X_SYSRANGE_START >> 8) & 0xFF, true);
+        i2c_master_write_byte(cmd, VL6180X_SYSRANGE_START & 0xFF, true);
+        i2c_master_write_byte(cmd, 0x01, true);
+        i2c_master_stop(cmd);
+
+        esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_1, cmd, pdMS_TO_TICKS(10));
+        i2c_cmd_link_delete(cmd);
+
+        if (ret == ESP_OK) {
+            measurement_started = true;
+        }
+        return last_valid_distance;
+    }
+
+    // Controlla se misura è pronta (non bloccante)
+    uint8_t status;
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, (VL6180X_RESULT_RANGE_STATUS >> 8) & 0xFF, true);
+    i2c_master_write_byte(cmd, VL6180X_RESULT_RANGE_STATUS & 0xFF, true);
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, &status, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+
+    esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_1, cmd, pdMS_TO_TICKS(10));
+    i2c_cmd_link_delete(cmd);
+
+    if (ret != ESP_OK) {
+        measurement_started = false;
+        return last_valid_distance;
+    }
+
+    // Se la misura non è ancora pronta, ritorna ultimo valore valido
+    if ((status & 0x01) == 0) {
+        return last_valid_distance;
+    }
+
+    // Misura pronta - leggi distanza
     cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, 0x1C, true); // AS5600_MAGNITUDE_LSB
+    i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, (VL6180X_RESULT_RANGE_VAL >> 8) & 0xFF, true);
+    i2c_master_write_byte(cmd, VL6180X_RESULT_RANGE_VAL & 0xFF, true);
     i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (0x36 << 1) | I2C_MASTER_READ, true);
-    i2c_master_read_byte(cmd, &lsb, I2C_MASTER_NACK);
+    i2c_master_write_byte(cmd, (VL6180X_ADDRESS << 1) | I2C_MASTER_READ, true);
+    i2c_master_read_byte(cmd, &distance, I2C_MASTER_NACK);
     i2c_master_stop(cmd);
-    
-    ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(100));
+
+    ret = i2c_master_cmd_begin(I2C_NUM_1, cmd, pdMS_TO_TICKS(10));
     i2c_cmd_link_delete(cmd);
-    
-    if (ret != ESP_OK) return magnitude;
-    
-    // Combina MSB e LSB
-    magnitude = ((uint16_t)(msb & 0x0F) << 8) | lsb;
-    magnitude &= 0x0FFF;
-    
-    return magnitude;
+
+    if (ret == ESP_OK) {
+        // Applica offset calibrazione da config.config_06
+        // Se config_06 >= 1000, sensore è disabilitato ma offset è (config_06 - 1000)
+        uint32_t effective_offset = (config.config_06 >= 1000) ? (config.config_06 - 1000) : config.config_06;
+
+        if (distance > effective_offset) {
+            last_valid_distance = distance - effective_offset;
+        } else {
+            last_valid_distance = 0;  // Troppo vicino, clamp a 0
+        }
+    }
+
+    measurement_started = false;  // Pronto per nuova misura
+    return last_valid_distance;
 }
 
 // =====================================
@@ -222,6 +396,11 @@ static void servo_init_once(void) {
 static void setServoPosition(bool open) {
     static uint32_t current_servo_us = 0;
     if (current_servo_us == 0) current_servo_us = config.servo_closed_us;
+
+    // Inverti logica se jumper GPIO28 è a LOW
+    if (servo_inverted) {
+        open = !open;
+    }
 
     uint32_t target_us = open ? config.servo_open_us : config.servo_closed_us;
     int32_t delta_us = (int32_t)target_us - (int32_t)current_servo_us;
@@ -322,6 +501,19 @@ static void door_gpio_init_once(void) {
     io.pull_up_en = GPIO_PULLUP_ENABLE;
     io.intr_type = GPIO_INTR_DISABLE;
     ESP_ERROR_CHECK(gpio_config(&io));
+
+    // Jumper inversione servo
+    io.pin_bit_mask = 1ULL << SERVO_INVERT_PIN;
+    io.mode = GPIO_MODE_INPUT;
+    io.pull_up_en = GPIO_PULLUP_ENABLE;
+    io.intr_type = GPIO_INTR_DISABLE;
+    ESP_ERROR_CHECK(gpio_config(&io));
+
+    // Leggi stato inversione servo (LOW = inverti)
+    servo_inverted = !gpio_get_level(SERVO_INVERT_PIN);
+    ESP_LOGI(TAG, "Servo inversione: %s (GPIO28=%d)",
+             servo_inverted ? "ABILITATA" : "NORMALE",
+             gpio_get_level(SERVO_INVERT_PIN));
 }
 
 // Funzione diagnostica per comando "door"
@@ -457,40 +649,38 @@ extern "C" void get_buffer_extended_status(char* buffer, size_t buffer_size) {
         "  Ultimo elemento:\n"
         "    Angle: %lu, IR: %lu, Detect: %lu\n"
         "    Door: %lu, TempClosed: %lu, Auth: %lu\n"
-        "    EventDuration: %lu decimi (%.1fs)\n",
-        
+        "    Distance: %lu mm\n",
+
         time_str,
         encoder_buffer_extended,
         (unsigned long)ENCODER_BUFFER_EXTENDED_SIZE,
         sizeof(EncoderDataExtended),
         memory_used_mb,
-        
+
         encoder_buffer_extended_index,
         (unsigned long)samples_in_buffer,
         fill_percentage,
         hours_coverage,
-        
+
         (unsigned long long)encoder_buffer_extended_total_samples,
         (unsigned long)encoder_buffer_extended_wraps,
-        
-        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+
+        (unsigned long)(encoder_buffer_extended_index > 0 ?
             encoder_buffer_extended[encoder_buffer_extended_index - 1].rawAngle :
-            (encoder_buffer_extended_total_samples > 0 ? 
+            (encoder_buffer_extended_total_samples > 0 ?
                 encoder_buffer_extended[ENCODER_BUFFER_EXTENDED_SIZE - 1].rawAngle : 0)),
-        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+        (unsigned long)(encoder_buffer_extended_index > 0 ?
             encoder_buffer_extended[encoder_buffer_extended_index - 1].infrared : 0),
-        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+        (unsigned long)(encoder_buffer_extended_index > 0 ?
             encoder_buffer_extended[encoder_buffer_extended_index - 1].detect : 0),
-        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+        (unsigned long)(encoder_buffer_extended_index > 0 ?
             encoder_buffer_extended[encoder_buffer_extended_index - 1].door_open : 0),
-        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+        (unsigned long)(encoder_buffer_extended_index > 0 ?
             encoder_buffer_extended[encoder_buffer_extended_index - 1].temp_closed : 0),
-        (unsigned long)(encoder_buffer_extended_index > 0 ? 
+        (unsigned long)(encoder_buffer_extended_index > 0 ?
             encoder_buffer_extended[encoder_buffer_extended_index - 1].authorized : 0),
-        (unsigned long)(encoder_buffer_extended_index > 0 ? 
-            encoder_buffer_extended[encoder_buffer_extended_index - 1].event_duration : 0),
-        encoder_buffer_extended_index > 0 ? 
-            encoder_buffer_extended[encoder_buffer_extended_index - 1].event_duration / 10.0f : 0.0f
+        (unsigned long)(encoder_buffer_extended_index > 0 ?
+            encoder_buffer_extended[encoder_buffer_extended_index - 1].distance : 0)
     );
 }
 
@@ -637,7 +827,7 @@ extern "C" void door_task(void *pv) {
         ESP_LOGI(TAG, "encoder_buffer è in DRAM interna ✗");
     }
 
-    // Inizializza AS5600
+    // Inizializza AS5600 (I2C_NUM_0)
     if (!encoder_i2c_initialized) {
         i2c_config_t i2c_config = {};
         i2c_config.mode = I2C_MODE_MASTER;
@@ -646,12 +836,12 @@ extern "C" void door_task(void *pv) {
         i2c_config.sda_pullup_en = GPIO_PULLUP_ENABLE;
         i2c_config.scl_pullup_en = GPIO_PULLUP_ENABLE;
         i2c_config.master.clk_speed = 400000; // 400kHz
-        
+
         esp_err_t ret = i2c_param_config(I2C_NUM_0, &i2c_config);
         if (ret == ESP_OK) {
             ret = i2c_driver_install(I2C_NUM_0, I2C_MODE_MASTER, 0, 0, 0);
         }
-        
+
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Errore inizializzazione I2C encoder: %s", esp_err_to_name(ret));
             ESP_LOGW(TAG, "Encoder userà valori di default");
@@ -659,6 +849,41 @@ extern "C" void door_task(void *pv) {
             encoder_i2c_initialized = true;
             ESP_LOGI(TAG, "I2C encoder inizializzato su SDA=%d, SCL=%d", ENCODER_SDA, ENCODER_SCL);
         }
+    }
+
+    // Inizializza VL6180X (I2C_NUM_1 - bus separato) se abilitato
+    // config_06 >= 1000 significa disabilitato (es. 1081 = disabilitato con offset 81 memorizzato)
+    if (!vl6180x_i2c_initialized && config.config_06 < 1000) {
+        i2c_config_t i2c_config = {};
+        i2c_config.mode = I2C_MODE_MASTER;
+        i2c_config.sda_io_num = VL6180X_SDA;
+        i2c_config.scl_io_num = VL6180X_SCL;
+        i2c_config.sda_pullup_en = GPIO_PULLUP_ENABLE;
+        i2c_config.scl_pullup_en = GPIO_PULLUP_ENABLE;
+        i2c_config.master.clk_speed = 400000; // 400kHz
+
+        esp_err_t ret = i2c_param_config(I2C_NUM_1, &i2c_config);
+        if (ret == ESP_OK) {
+            ret = i2c_driver_install(I2C_NUM_1, I2C_MODE_MASTER, 0, 0, 0);
+        }
+
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Errore inizializzazione I2C VL6180X: %s", esp_err_to_name(ret));
+            ESP_LOGW(TAG, "VL6180X non disponibile");
+        } else {
+            ESP_LOGI(TAG, "I2C VL6180X inizializzato su SDA=%d, SCL=%d", VL6180X_SDA, VL6180X_SCL);
+
+            // Inizializza il sensore VL6180X
+            ret = vl6180x_init();
+            if (ret == ESP_OK) {
+                vl6180x_i2c_initialized = true;
+                ESP_LOGI(TAG, "VL6180X pronto");
+            } else {
+                ESP_LOGW(TAG, "VL6180X init fallita, sensore non risponde");
+            }
+        }
+    } else if (config.config_06 >= 1000) {
+        ESP_LOGI(TAG, "VL6180X disabilitato (config_06=%u >= 1000)", config.config_06);
     }
 
     char time_str[20];
@@ -923,12 +1148,16 @@ extern "C" void door_task(void *pv) {
             }
         }
 
-        // Leggi encoder e infrared
-        uint16_t rawAngle = encoder_readAngle();
-        uint16_t magnitude = encoder_readMagnitude();
-        (void)magnitude; // Silenzia warning unused
+        // Leggi encoder e infrared (ottimizzato: burst read)
+        uint16_t rawAngle, magnitude;
+        encoder_readAngleAndMagnitude(&rawAngle, &magnitude);
         bool infrared = gpio_get_level(INFRARED) || interruptFlag;  // Sente sia il livello che i fronti in interrupt
         interruptFlag = false;
+
+        // Leggi distanza VL6180X (se inizializzato)
+        if (vl6180x_i2c_initialized) {
+            lastDistance = vl6180x_readDistance();
+        }
 
         // LED blu per infrarosso
         gpio_set_level(LED_BLU, infrared ? LED_ON : LED_OFF);
@@ -1101,19 +1330,12 @@ extern "C" void door_task(void *pv) {
             data_ext.detect = detect ? 1 : 0;
             data_ext.door_open = door_open ? 1 : 0;
             data_ext.newcode = newcode ? 1 : 0;
-            data_ext.temp_closed = temp_closed_active ? 1 : 0;  // NUOVO campo
-            data_ext.manual_open = (!gpio_get_level(PULSANTE_BLU)) ? 1 : 0;  // NUOVO campo
-            data_ext.authorized = is_authorized ? 1 : 0;        // NUOVO campo
+            data_ext.temp_closed = temp_closed_active ? 1 : 0;
+            data_ext.manual_open = (!gpio_get_level(PULSANTE_BLU)) ? 1 : 0;
+            data_ext.authorized = is_authorized ? 1 : 0;
             data_ext.servo_moving = 0;  // TODO: implementare rilevamento movimento servo
-            
-            // Calcola durata evento corrente (cappata a 255 decimi = 25.5s)
-            uint32_t event_duration_decisecs = 0;
-            if (stato_evento == EVENTO_ATTIVO && indice_inizio <= 2550) {  // 255*10 = 2550 campioni max
-                event_duration_decisecs = (indice_inizio + 1) / 10;  // Converti campioni in decimi di secondo
-                if (event_duration_decisecs > 255) event_duration_decisecs = 255;
-            }
-            data_ext.event_duration = event_duration_decisecs;
-            data_ext.reserved = 0;      // Riservato per il futuro
+            data_ext.distance = lastDistance;  // Distanza VL6180X (0-255mm)
+            data_ext.reserved = 0;
             
             // Salva con gestione avvolgimento circolare
             encoder_buffer_extended[encoder_buffer_extended_index] = data_ext;

@@ -31,9 +31,14 @@
 #define INFRARED         GPIO_NUM_3   // Sensore infrarosso della gattaiola
 #define INFRARED_ENABLE  GPIO_NUM_8      // Abilitazione sensore infrarosso
 #define SERVO_PIN        GPIO_NUM_12    //Uscita pwm servomotore
+#define SERVO_INVERT_PIN GPIO_NUM_28    //Jumper inversione servo (LOW=inverti, HIGH=normale)
 
 #define ENCODER_SDA      GPIO_NUM_10
 #define ENCODER_SCL      GPIO_NUM_9
+
+#define VL6180X_SDA      GPIO_NUM_41
+#define VL6180X_SCL      GPIO_NUM_42
+#define VL6180X_OFFSET_MM  35  // Offset calibrazione (mm da sottrarre)
 
 #define LED_ON 0
 #define LED_OFF 1
@@ -85,7 +90,7 @@ typedef struct {
     uint32_t config_03; //Soglia porta open:
     uint32_t config_04; //Door event durata:
     uint32_t config_05; //durata in minuti chiusuraper codice non autorizzato
-    uint32_t config_06;
+    uint32_t config_06; //VL6180X: 0-999=offset mm, >=1000=disabilitato (es.1081=disab+offset81)
     uint32_t config_07;
     uint32_t config_08;
     uint32_t config_09;
@@ -124,7 +129,7 @@ struct EncoderDataExtended {
     uint32_t authorized : 1;    // Bit 6 - Codice autorizzato
     uint32_t servo_moving : 1;  // Bit 7 - Servo in movimento
     uint32_t rawAngle : 12;     // Bit 8-19 - Angolo raw (12 bit = 0-4095)
-    uint32_t event_duration : 8; // Bit 20-27 - Durata evento in decimi di secondo (0-255 = 0-25.5s)
+    uint32_t distance : 8;      // Bit 20-27 - Distanza VL6180X in mm (0-255mm)
     uint32_t reserved : 4;      // Bit 28-31 - Riservato per espansioni future
 };
 
@@ -150,6 +155,7 @@ extern uint32_t log_count;
 extern volatile uint16_t lastRawAngle;
 extern volatile uint16_t lastMagnitude;
 extern volatile uint16_t lastCorrectedAngle;
+extern volatile uint8_t lastDistance;  // VL6180X distance in mm (0-255)
 
 
 // Funzioni

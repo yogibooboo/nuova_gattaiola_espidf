@@ -179,11 +179,11 @@ class EventGraphModal {
             const authorized = (packed >> 6) & 0x1;
             const servo_moving = (packed >> 7) & 0x1;
             const rawAngle = (packed >> 8) & 0xFFF;
-            const event_duration = (packed >> 20) & 0xFF;
-            
+            const distance = (packed >> 20) & 0xFF;  // Distanza VL6180X in mm (0-255)
+
             const angleDegrees = (rawAngle / 4095) * 360;
             const timeSeconds = i * 0.1;
-            
+
             samples.push({
                 time: timeSeconds,
                 angle: angleDegrees,
@@ -195,7 +195,7 @@ class EventGraphModal {
                 manual_open: manual_open,
                 authorized: authorized,
                 servo_moving: servo_moving,
-                event_duration: event_duration / 10.0
+                distance: distance  // Distanza in mm
             });
         }
         
@@ -229,6 +229,20 @@ class EventGraphModal {
                 borderWidth: 2,
                 fill: false,
                 yAxisID: 'angleAxis',
+                pointRadius: 0,
+                pointHoverRadius: 4
+            },
+            {
+                label: 'Distanza (mm)',
+                data: this.processedData.map(sample => ({
+                    x: sample.time,
+                    y: sample.distance
+                })),
+                borderColor: '#e67e22',
+                backgroundColor: 'rgba(230, 126, 34, 0.1)',
+                borderWidth: 2,
+                fill: false,
+                yAxisID: 'distanceAxis',
                 pointRadius: 0,
                 pointHoverRadius: 4
             },
@@ -418,6 +432,16 @@ class EventGraphModal {
                         ticks: {
                             color: '#3498db',
                             font: { size: isLandscape ? 9 : 11 }
+                        }
+                    },
+                    distanceAxis: {
+                        type: 'linear',
+                        position: 'left',
+                        display: false,  // Nasconde l'asse per non sprecare spazio
+                        min: 0,
+                        max: 255,
+                        grid: {
+                            display: false
                         }
                     },
                     digitalAxis: {
