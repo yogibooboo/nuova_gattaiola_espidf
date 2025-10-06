@@ -599,8 +599,14 @@ static void rfid_task(void *pvParameters)
         ESP_ERROR_CHECK(pcnt_new_channel(pcnt_unit, &chan_config, &pcnt_chan));
 
     // 4) Configura per contare sui fronti di salita
-    ESP_ERROR_CHECK(pcnt_channel_set_edge_action(pcnt_chan, 
+    ESP_ERROR_CHECK(pcnt_channel_set_edge_action(pcnt_chan,
         PCNT_CHANNEL_EDGE_ACTION_INCREASE, PCNT_CHANNEL_EDGE_ACTION_HOLD));
+
+    // 4b) Abilita filtro glitch hardware - elimina rimbalzi/disturbi
+    pcnt_glitch_filter_config_t filter_config = {
+        .max_glitch_ns = 1000,  // Filtra impulsi < 1us (1000ns)
+    };
+    ESP_ERROR_CHECK(pcnt_unit_set_glitch_filter(pcnt_unit, &filter_config));
 
     // 5) Registra callback per watch point
     pcnt_event_callbacks_t cbs = {
