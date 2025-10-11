@@ -854,6 +854,25 @@ extern "C" void door_task(void *pv) {
     // Inizializza VL6180X (I2C_NUM_1 - bus separato) se abilitato
     // config_06 >= 1000 significa disabilitato (es. 1081 = disabilitato con offset 81 memorizzato)
     if (!vl6180x_i2c_initialized && config.config_06 < 1000) {
+        // FASE 1: Prepara GPIO - tutti LOW prima di accendere sensore
+        gpio_reset_pin(VL6180X_VCC);
+        gpio_reset_pin(VL6180X_SDA);
+        gpio_reset_pin(VL6180X_SCL);
+
+        gpio_set_direction(VL6180X_VCC, GPIO_MODE_OUTPUT);
+        gpio_set_direction(VL6180X_SDA, GPIO_MODE_OUTPUT);
+        gpio_set_direction(VL6180X_SCL, GPIO_MODE_OUTPUT);
+
+        gpio_set_level(VL6180X_VCC, 0);  // VCC LOW
+        gpio_set_level(VL6180X_SDA, 0);  // SDA LOW
+        gpio_set_level(VL6180X_SCL, 0);  // SCL LOW
+        vTaskDelay(pdMS_TO_TICKS(10));   // Assicura power-off completo
+
+        // FASE 2: Power-on del sensore
+        gpio_set_level(VL6180X_VCC, 1);  // VCC HIGH - alimenta sensore
+        vTaskDelay(pdMS_TO_TICKS(50));   // Attendi stabilizzazione alimentazione
+
+        // FASE 3: Configura I2C (sostituisce le funzioni output con I2C)
         i2c_config_t i2c_config = {};
         i2c_config.mode = I2C_MODE_MASTER;
         i2c_config.sda_io_num = VL6180X_SDA;
@@ -870,16 +889,45 @@ extern "C" void door_task(void *pv) {
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Errore inizializzazione I2C VL6180X: %s", esp_err_to_name(ret));
             ESP_LOGW(TAG, "VL6180X non disponibile");
+            // Power-off su errore - riporta SDA/SCL a LOW
+            gpio_set_direction(VL6180X_SDA, GPIO_MODE_OUTPUT);
+            gpio_set_direction(VL6180X_SCL, GPIO_MODE_OUTPUT);
+            gpio_set_level(VL6180X_SDA, 0);
+            gpio_set_level(VL6180X_SCL, 0);
+            gpio_set_level(VL6180X_VCC, 0);
         } else {
             ESP_LOGI(TAG, "I2C VL6180X inizializzato su SDA=%d, SCL=%d", VL6180X_SDA, VL6180X_SCL);
 
-            // Inizializza il sensore VL6180X
-            ret = vl6180x_init();
-            if (ret == ESP_OK) {
-                vl6180x_i2c_initialized = true;
-                ESP_LOGI(TAG, "VL6180X pronto");
-            } else {
-                ESP_LOGW(TAG, "VL6180X init fallita, sensore non risponde");
+            // FASE 4: Inizializza il sensore VL6180X con retry
+            const int max_attempts = 3;
+            for (int attempt = 1; attempt <= max_attempts; attempt++) {
+                ret = vl6180x_init();
+                if (ret == ESP_OK) {
+                    vl6180x_i2c_initialized = true;
+                    ESP_LOGI(TAG, "VL6180X pronto");
+                    break;
+                }
+
+                ESP_LOGW(TAG, "VL6180X init fallito (tentativo %d/%d)", attempt, max_attempts);
+
+                if (attempt < max_attempts) {
+                    // Power cycle: OFF -> ON
+                    ESP_LOGI(TAG, "Power cycle VL6180X...");
+                    gpio_set_level(VL6180X_VCC, 0);
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    gpio_set_level(VL6180X_VCC, 1);
+                    vTaskDelay(pdMS_TO_TICKS(50));
+                }
+            }
+
+            if (!vl6180x_i2c_initialized) {
+                ESP_LOGE(TAG, "VL6180X init fallito dopo %d tentativi - sensore disabilitato", max_attempts);
+                // Power-off definitivo - riporta SDA/SCL a LOW
+                gpio_set_direction(VL6180X_SDA, GPIO_MODE_OUTPUT);
+                gpio_set_direction(VL6180X_SCL, GPIO_MODE_OUTPUT);
+                gpio_set_level(VL6180X_SDA, 0);
+                gpio_set_level(VL6180X_SCL, 0);
+                gpio_set_level(VL6180X_VCC, 0);
             }
         }
     } else if (config.config_06 >= 1000) {

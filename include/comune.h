@@ -38,6 +38,7 @@
 
 #define VL6180X_SDA      GPIO_NUM_41
 #define VL6180X_SCL      GPIO_NUM_42
+#define VL6180X_VCC      GPIO_NUM_40   // Alimentazione controllata via GPIO
 #define VL6180X_OFFSET_MM  35  // Offset calibrazione (mm da sottrarre)
 
 #define LED_ON 0
