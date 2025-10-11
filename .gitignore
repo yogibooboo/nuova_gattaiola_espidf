@@ -4,6 +4,11 @@ Thumbs.db
 
 # Cartella delle dipendenze e dei toolchain di PlatformIO
 .pio/
+# Eccezioni: salva binari e immagine SPIFFS
+!.pio/build/
+!.pio/build/esp32-s3-devkitc-1/
+!.pio/build/esp32-s3-devkitc-1/firmware.bin
+!.pio/build/esp32-s3-devkitc-1/spiffs.bin
 
 # Cartella di build
 .build/

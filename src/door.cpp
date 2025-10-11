@@ -1089,8 +1089,8 @@ extern "C" void door_task(void *pv) {
                     } else {
                         // Reinizializza il timer per nuovo codice non autorizzato
                         temp_closed_start = xTaskGetTickCount();
-                        add_log_entry(now, "Chiusura prolungata non auth", cat_name, country_code, device_code, false);
-                        ESP_LOGI(TAG, "[%s] Timeout chiusura prolungato per gatto non autorizzato: %s", time_str, cat_name);
+                        //add_log_entry(now, "Chiusura prolungata non auth", cat_name, country_code, device_code, false);
+                        //ESP_LOGI(TAG, "[%s] Timeout chiusura prolungato per gatto non autorizzato: %s", time_str, cat_name);
                     }
                 } else if (temp_closed_active) {
                     // Gatto autorizzato: riapri immediatamente
