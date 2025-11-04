@@ -550,8 +550,8 @@ static esp_err_t status_handler(httpd_req_t *req) {
 
         cJSON_AddItemToArray(log_array, entry);
 
-        // Limita a max 50 entry per non sovraccaricare la risposta
-        if (i >= 49) break;
+        // Limita a max 100 entry (dimensione buffer eventi)
+        if (i >= 99) break;
     }
 
     // Serializza e invia

@@ -1117,8 +1117,10 @@ extern "C" void door_task(void *pv) {
                     ESP_LOGI(TAG, " CODICE");
                 } else if (device_code != device_code_evento || country_code != country_code_evento) {
                     newcode = true;
-                    ESP_LOGI(TAG, " NEWCODE, CC: %u, DC: %llu,ECC: %u, EDC: %llu,",
-                    country_code, (unsigned long long)device_code,country_code_evento, (unsigned long long)device_code_evento);
+                    ESP_LOGI(TAG, " NEWCODE, CC:%u DC:%llu ECC:%u EDC:%llu | LAST_CC:%u LAST_DC:%llu",
+                    country_code, (unsigned long long)device_code,
+                    country_code_evento, (unsigned long long)device_code_evento,
+                    last_country_code, (unsigned long long)last_device_code);
                 }
             }
 

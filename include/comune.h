@@ -92,7 +92,7 @@ typedef struct {
     uint32_t config_04; //Door event durata:
     uint32_t config_05; //durata in minuti chiusuraper codice non autorizzato
     uint32_t config_06; //VL6180X: 0-999=offset mm, >=1000=disabilitato (es.1081=disab+offset81)
-    uint32_t config_07;
+    uint32_t config_07; //dutycycle 134 khz 0= 50% <50= 0
     uint32_t config_08;
     uint32_t config_09;
     uint32_t config_10;

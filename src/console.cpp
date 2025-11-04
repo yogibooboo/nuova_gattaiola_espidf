@@ -19,6 +19,7 @@
 #include "core1.h"
 #include "door.h"
 #include "wifi.h"
+#include <driver/adc.h>
 
 
 // ============================
@@ -253,7 +254,8 @@ static void print_help() {
     cli_puts("  system flash    - informazioni memoria flash\n");
     cli_puts("  system task     - stato task FreeRTOS\n");
     cli_puts("  buff            - stato encoder buffer esteso\n");
-    
+    cli_puts("  vcoil           - leggi tensione coil (GPIO18/ADC2_CH7)\n");
+
 }
 
 static void exec_command(const char* line) {
@@ -453,11 +455,51 @@ static void exec_command(const char* line) {
     }
         if (strncmp(cmd, "system", 6) == 0) {
         const char* subcmd = (strlen(cmd) > 7) ? cmd + 7 : "";
-        
+
         get_system_diagnostics(cli_unified_buffer, sizeof(cli_unified_buffer), subcmd);
         cli_printbuf(cli_unified_buffer);
         return;
     }
+
+    if (streq_ci(cmd, "vcoil")) {
+        // Lettura ADC2_CHANNEL_7 (GPIO18) con retry per conflitto WiFi
+        // Usa legacy driver (compatibile con door.cpp)
+
+        // Configura ADC2 una sola volta (idempotente)
+        static bool adc2_configured = false;
+        if (!adc2_configured) {
+            adc2_config_channel_atten(ADC2_CHANNEL_7, ADC_ATTEN_DB_12);
+            adc2_configured = true;
+        }
+
+        // Retry lettura (WiFi potrebbe bloccare ADC2)
+        int raw_value = 0;
+        esp_err_t ret = ESP_FAIL;
+        int attempts = 0;
+        const int max_attempts = 10;
+
+        for (attempts = 0; attempts < max_attempts; attempts++) {
+            ret = adc2_get_raw(ADC2_CHANNEL_7, ADC_WIDTH_BIT_12, &raw_value);
+            if (ret == ESP_OK) break;
+            vTaskDelay(pdMS_TO_TICKS(10));  // Attendi e riprova
+        }
+
+        if (ret == ESP_OK) {
+            float voltage = (float)raw_value * 330.0f / 4098.0f;
+            snprintf(cli_unified_buffer, sizeof(cli_unified_buffer),
+                     "Tensione coil (GPIO18): %.3f V (raw: %d, tentativi: %d)\n",
+                     voltage, raw_value, attempts + 1);
+        } else {
+            snprintf(cli_unified_buffer, sizeof(cli_unified_buffer),
+                     "ERR: Lettura ADC2 fallita dopo %d tentativi - WiFi attivo blocca ADC2\n"
+                     "Suggerimento: disabilita WiFi temporaneamente o riprova\n",
+                     max_attempts);
+        }
+
+        cli_printbuf(cli_unified_buffer);
+        return;
+    }
+
     // Comando sconosciuto
     cli_puts("ERR: comando sconosciuto. Digita 'help'\n");
 }

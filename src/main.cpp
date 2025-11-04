@@ -80,8 +80,21 @@ static esp_err_t pwm134_start(gpio_num_t pin = (gpio_num_t)F134KHZ)
     ESP_RETURN_ON_ERROR(rmt_enable(s_rmt_chan), TAG_RMT, "enable");
 
     static rmt_symbol_word_t sym;
-    sym.level0    = 1;  sym.duration0 = HALF_TICKS;  // HIGH
-    sym.level1    = 0;  sym.duration1 = HALF_TICKS;  // LOW
+    sym.level0    = 1;
+
+    // Configura duty cycle in base a config_07
+    if (config.config_07 >= 1 && config.config_07 <= 50) {
+        // config_07 = 1-50: duty cycle proporzionale (1-50%)
+        sym.duration0 = (PERIOD_TICKS * config.config_07) / 100;
+    } else if (config.config_07 == 0) {
+        // config_07 = 0: duty cycle 50% (default)
+        sym.duration0 = PERIOD_TICKS / 2;
+    } else {
+        // config_07 > 50: duty cycle 0% (sempre LOW)
+        sym.duration0 = 0;
+    }
+
+    sym.level1    = 0;  sym.duration1 = PERIOD_TICKS - sym.duration0;  // LOW
 
     rmt_transmit_config_t tx_trans_cfg = {
         .loop_count = -1,          // infinito
