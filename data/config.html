@@ -305,8 +305,8 @@
                     <td>${cat.country_code}</td>
                     <td>${cat.authorized ? 'Sì' : 'No'}</td>
                     <td>
-                        <button onclick="editCat('${cat.device_code}')">Modifica</button>
-                        <button onclick="deleteCat('${cat.device_code}')">Elimina</button>
+                        <button onclick="editCat(${cat.device_code})">Modifica</button>
+<button onclick="deleteCat(${cat.device_code})">Elimina</button>
                     </td>
                 `;
                 tbody.appendChild(row);
@@ -328,7 +328,7 @@
                 return;
             }
 
-            const cat = { name, device_code: deviceCode, country_code: countryCode, authorized };
+            const cat = { name, device_code: Number(deviceCode), country_code: countryCode, authorized };
             if (editingCat) {
                 cat.original_device_code = editingCat;
             }

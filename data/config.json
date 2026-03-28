@@ -14,7 +14,7 @@
     "config_02": 113,
     "config_03": 682,
     "config_04": 200,
-    "config_05": 0,
+    "config_05": 1,
     "config_06": 0,
     "config_07": 30,
     "config_08": 0,
@@ -44,6 +44,14 @@
             "name": "Golia",
             "authorized": false
         },
+
+        {
+            "device_code": 260100423089,
+            "country_code": 380,
+            "name": "Macchia",
+            "authorized": false
+        },
+
 
         {
             "device_code": 263002119508,
